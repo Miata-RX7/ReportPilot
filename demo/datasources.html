@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ReportPilot 演示 · 数据源管理</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="topbar">
+  <div class="logo">Report<span>Pilot</span> <span class="badge b-gray" style="margin-left:6px">UI Demo</span></div>
+  <nav>
+    <a href="index.html">产品概览</a>
+    <a href="datasources.html" class="active">数据源管理</a>
+    <a href="metrics.html">指标定义</a>
+    <a href="templates.html">模板与绑定</a>
+    <a href="reports.html">报告生成与审核</a>
+  </nav>
+</div>
+
+<div class="wrap">
+  <div class="page-head" style="display:flex;justify-content:space-between;align-items:flex-end">
+    <div>
+      <div class="page-title">数据源管理</div>
+      <div class="page-sub">管理监控平台连接。密钥加密存储、接口脱敏返回，删除为软删除（保留历史可追溯）。</div>
+    </div>
+    <span class="btn btn-primary">+ 新增数据源</span>
+  </div>
+
+  <div class="callout info">
+    对应后端接口：<span class="mono">GET/POST /api/datasources</span>、<span class="mono">PUT/DELETE /api/datasources/{id}</span>、<span class="mono">POST /api/datasources/{id}/test</span>
+  </div>
+
+  <div class="card">
+    <h2>数据源列表</h2>
+    <table>
+      <tr>
+        <th>名称</th><th>类型</th><th>地址</th><th>密钥</th><th>SSL 校验</th><th>状态</th><th style="width:220px">操作</th>
+      </tr>
+      <tr>
+        <td><b>生产 Zabbix</b></td>
+        <td><span class="badge b-blue">zabbix</span></td>
+        <td class="mono">https://zb.livecom.hk/</td>
+        <td><span class="secret">****3a91</span></td>
+        <td><span class="badge b-amber">已跳过</span></td>
+        <td><span class="badge b-green">● 连接正常 · v7.2.0</span></td>
+        <td>
+          <span class="btn btn-sm">测试连接</span>
+          <span class="btn btn-sm">编辑</span>
+          <span class="btn btn-sm btn-danger-ghost">删除</span>
+        </td>
+      </tr>
+      <tr>
+        <td><b>灾备 Zabbix</b></td>
+        <td><span class="badge b-blue">zabbix</span></td>
+        <td class="mono">https://zb-dr.livecom.hk/</td>
+        <td><span class="secret">****c07e</span></td>
+        <td><span class="badge b-green">已启用</span></td>
+        <td><span class="badge b-gray">未测试</span></td>
+        <td>
+          <span class="btn btn-sm">测试连接</span>
+          <span class="btn btn-sm">编辑</span>
+          <span class="btn btn-sm btn-danger-ghost">删除</span>
+        </td>
+      </tr>
+      <tr>
+        <td><b>AIOps 平台（占位）</b></td>
+        <td><span class="badge b-violet">aiops</span></td>
+        <td class="mono">https://aiops.internal/</td>
+        <td><span class="secret">****f2b0</span></td>
+        <td><span class="badge b-green">已启用</span></td>
+        <td><span class="badge b-gray">Phase 2 启用</span></td>
+        <td>
+          <span class="btn btn-sm">测试连接</span>
+          <span class="btn btn-sm">编辑</span>
+          <span class="btn btn-sm btn-danger-ghost">删除</span>
+        </td>
+      </tr>
+      <tr style="opacity:.45">
+        <td><b>旧测试源（已删除）</b></td>
+        <td><span class="badge b-gray">zabbix</span></td>
+        <td class="mono">http://10.0.0.8/</td>
+        <td><span class="secret">****3456</span></td>
+        <td>—</td>
+        <td><span class="badge b-red">已软删除</span></td>
+        <td class="muted">is_active=false，同名可重建</td>
+      </tr>
+    </table>
+  </div>
+
+  <div class="cols">
+    <div class="card">
+      <h2>新增 / 编辑数据源（表单示意）</h2>
+      <table>
+        <tr><td style="width:130px" class="muted">名称 *</td><td>生产 Zabbix <span class="muted">（同名冲突返回 409）</span></td></tr>
+        <tr><td class="muted">类型 *</td><td><span class="badge b-blue">zabbix</span> <span class="badge b-gray" style="opacity:.5">aiops（Phase 2）</span></td></tr>
+        <tr><td class="muted">URL *</td><td class="mono">https://zb.livecom.hk/</td></tr>
+        <tr><td class="muted">认证方式</td><td class="mono">bearer_token</td></tr>
+        <tr><td class="muted">API Token</td><td><span class="muted">••••••••••••••••（留空表示不修改原密钥）</span></td></tr>
+        <tr><td class="muted">超时（秒）</td><td class="mono">10</td></tr>
+        <tr><td class="muted">跳过 SSL 校验</td><td>☑（自签名证书场景）</td></tr>
+      </table>
+      <p class="muted" style="margin-top:10px">
+        提交后服务端用 Fernet 加密 Token 存入 <span class="mono">secret_encrypted</span>，
+        任何接口都只返回 <span class="mono">secret_hint</span>（如 <span class="secret">****3a91</span>），永不回显明文。
+      </p>
+    </div>
+
+    <div class="card">
+      <h2>连通性测试结果（/test 返回示意）</h2>
+      <p class="muted" style="margin-bottom:8px">测试分两步：① <span class="mono">apiinfo.version</span>（不带认证头，验证 URL 可达）② <span class="mono">hostgroup.get</span>（带 Token，验证认证与权限）。错误分类提示：</p>
+      <div class="callout info" style="margin-bottom:8px">
+        <b>成功</b> — <span class="mono">{ "success": true, "message": "连接成功" }</span>（日志记录版本 7.2.0）
+      </div>
+      <div class="callout warn" style="margin-bottom:8px">
+        <b>URL 不可达 / 超时</b> — <span class="mono">{ "success": false, "message": "URL 不可达: ConnectError ..." }</span>
+      </div>
+      <div class="callout warn" style="margin-bottom:0">
+        <b>认证失败 / 权限不足 / 接口错误</b> — 分别映射 AdapterAuthError / AdapterPermissionError / AdapterAPIError，给出可读提示
+      </div>
+    </div>
+  </div>
+
+  <div class="footer-note">ReportPilot UI Demo · 静态演示页，数据均为 mock</div>
+</div>
+</body>
+</html>
