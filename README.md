@@ -1,382 +1,360 @@
 # ReportPilot
 
-月报自动化生成系统：数据接入 → 数据汇算 → AI 洞察摘要 → 模板生成 → 审核推送。
-AI 仅用于辅助生成分析文字，不参与任何指标计算（facts/insights 强制分离）。
+> 数据接入 → 数据汇算 → AI 洞察摘要 → 模板生成 → 审核推送
+>
+> **AI 只负责写文字，所有指标数值由汇算引擎独立产出**，两者在数据层强制分离。
 
-## 快速开始（开发）
+把「监控指标」变成「可审核、可追溯的 Word 月报」：从 Zabbix 取数、按周期汇算、用 AI 生成分析文字、
+套进 Word 模板、邮件推送并等待确认。
 
-```bash
-cd backend
-cp .env.example .env   # 填写 ENCRYPTION_KEY（必须）等配置
-docker compose up -d db
-pip install -r requirements.txt
-alembic upgrade head
-uvicorn app.main:app --reload
+---
+
+## 目录
+
+- [它能做什么](#它能做什么)
+- [数据是怎么流动的](#数据是怎么流动的)
+- [技术栈](#技术栈)
+- [安装与运行](#安装与运行)
+- [配置项](#配置项)
+- [创建账号](#创建账号)
+- [ONLYOFFICE：模板在线编辑（可选）](#onlyoffice模板在线编辑可选)
+- [验证安装是否成功](#验证安装是否成功)
+- [开发与测试](#开发与测试)
+- [安全须知](#安全须知)
+- [延伸文档](#延伸文档)
+
+---
+
+## 它能做什么
+
+### 1. 多源数据接入
+
+- **Zabbix 7.x** 为主（JSON-RPC over HTTP）：主机组 → 主机 → 监控项三级浏览后直接选进指标
+- 数据源凭据用 **Fernet 对称加密**落库，接口与日志**永不回显明文**，只给 `secret_hint`（`****末4位`）
+- 每个数据源可独立配置超时、限流、CA 证书校验（`verify_ssl`）
+- adapter 层抽象清晰，可扩展到其它监控源
+
+### 2. 指标与取数汇算（五类指标）
+
+| 类型 | 用途 | 取数 | 产出 |
+| --- | --- | --- | --- |
+| `scalar` | 数值 | 多 item 聚合（`avg`/`sum`/`max`/`min`…） | 浮点值 + 环比 + 基线 |
+| `text` | 文本 | 0~1 个 item 的最新值，或固定文案 | 字符串 |
+| `curve` | 折线图 | 每 item 一条曲线，**整段合并成一次 `trend.get`** | 序列点集 |
+| `pie` | 饼图 | 单 item，按 UP/DOWN 值域统计小时占比 | UP/DOWN 计数与占比 |
+| `time` | 时间 | **不取数**，按计算时刻 + 偏移 + 格式词表渲染 | 字符串 |
+
+- **两阶段聚合**：先按小时聚合区间内的 trend，再跨 item 用**同一个 agg** 聚合；基线用**日历月平移**而非固定 30 天
+- **数值变换**：`value = raw × mul + add`，变换后的值参与环比与阈值判定
+- **单位换算**（纯展示派生）：`none` / `auto`（K/M/G/T，可选 1000 或 1024 进制）/ `fixed`。
+  事实层存原始值，展示层另给 `display_value`，**Word / 图表 / AI / 页面四处口径一致**
+- **显著性判定**：按 `|环比变化|` 阈值挑出需要 AI 点评的指标，未超阈值的只给事实不给文字
+### 3. AI 洞察摘要
+
+- **只写文字，不参与计算**：送给模型的是结构化 facts，数值一个都不许它自己算
+- **系统提示词页面化**：两段规则（基础 / 追加）全局可编辑，模板级还能再覆盖。
+  **三层回退**：绑定级 → 全局 → 代码内置默认，改完**立即生效，无需发版重启**
+- **改完直接试跑**：选模板 + 槽位 + 周期，用真实 facts 出稿；不落库、不生成 docx
+- **版本与回滚**：`ai_prompt_versions` 是 **append-only 账本**，记谁在何时改了什么，可逐条一键回滚
+- **数字自检护栏**：输出里出现的数字必须能在 facts 中找到出处，否则拦截并纠正重试；
+  抄用参考范文的示例数字、条目数超出范文骨架，同样会被拦下
+- **曲线只送统计摘要**（`min/max/avg/last`），避免把几万个原始点塞进 prompt 让模型自己找峰值
+- **调用留痕**：每次请求的参数、messages、响应原文、重试过程都可查
+
+### 4. Word 模板与绑定
+
+- 上传 `.docx` → **自动扫描 `{{ 占位符 }}`**
+- **在线编辑 / 预览原始文档**（ONLYOFFICE Document Server），保存即落为**新版本**并重扫占位符、自动清理失效绑定
+- 版本历史 + **一键回滚**到任意历史版本
+- 两类绑定：
+  - **指标绑定** —— 选指标 + 单位 + 显示精度 + 数值变换
+  - **AI 摘要绑定** —— 每个摘要槽位独立配写作要求 / 参考范文 / 字数 / 温度 / 波动阈值
+- **占位符独占约束**：图表变量必须独占一个段落（否则 docxtpl 会把 140mm 宽的图挤在文字中间，版式不可控），
+  绑定时直接校验拒绝，返回 422
+- **授权**：模板级 `edit` / `view` 授权，与 admin / 属主组成三层权限
+
+### 5. 图表渲染
+
+- `curve` / `pie` 指标用 matplotlib 渲染成 **PNG 字节**，`docxtpl InlineImage` 内嵌，**不落临时文件、无缓存失效问题**
+- 镜像内置 `fonts-wqy-microhei` 中文字体（+1.6MB），避免图表中文变成豆腐块
+- 图内标注复用同一套统计函数 —— 同一张图不会出现两个峰值
+
+### 6. 报告生成与推送
+
+- 报告任务按 **cron 调度**（APScheduler，DB 是唯一真相源），支持**月报 / 周报**两种粒度，可设周期偏移（如上周）
+- 同步生成 Word → 邮件推送 → **确认链接**（短期一次性 token）→ 未确认自动**催办**
+- 全程写 `PushRecord`：确认邮件、催办提醒、重推都有记录，可在页面上查每一次发送
+- 容器重启后调度状态可从库里恢复，不会重复触发或漏跑
+
+### 7. 页面化配置
+
+「系统设置」页可直接编辑并**立即生效**（无需重启）：
+
+- **邮件集成**（SMTP）—— 密码留空表示不修改，不是清空
+- **AI 集成** —— 任意 OpenAI 兼容端点（base_url / model / key / 超时）
+- **AI 系统提示词** —— 两段规则编辑 + 内置默认查看 + 历史版本回滚
+- 运行时配置落 `app_settings` 表，密钥字段 Fernet 加密，接口只回 `*_secret_set` 布尔
+
+### 8. 权限模型
+
+| 角色 | 能力 |
+| --- | --- |
+| `admin` | 全部：用户管理、系统设置、所有模板 |
+| 属主（`manage`） | 自己模板的上传 / 版本 / 绑定 / 授权 / 删除 |
+| 被授权 `edit` | 编辑文档 + 配置绑定 |
+| 被授权 `view` | 只读 |
+| 登录用户 | 创建报告任务、确认报告、查自己的历史 |
+
+密码 **argon2id 单向哈希**，忘记无法找回明文，只能重置。
+
+---
+
+## 数据是怎么流动的
+
+```
+Zabbix API --> adapter --> calc_engine --> MetricFact[] --+--> docxtpl --> 月报.docx --> mailer --> 收件人
+  (trend.get)   (区间语义)    (两阶段聚合)      (事实层)      |                |
+                                                单位换算/数值变换              +--> matplotlib --> 内嵌 PNG
+                                                          |
+                                                          +--> ai_insight --> 洞察文字（只读facts，禁止自行推算）
+                                                                               |
+                                                                    数字自检护栏 <--+ 对不上就纠正重试
 ```
 
-生成 ENCRYPTION_KEY：
+**一句话记住红线**：数值全部来自左边的 `calc_engine`，AI 只在右边写字，且它写的每个数字都要能指回 `MetricFact`。
+
+---
+
+## 技术栈
+
+| 层 | 选型 |
+| --- | --- |
+| 后端 | Python 3.11 · FastAPI · SQLAlchemy 2（async）· Alembic · APScheduler · Pydantic v2 |
+| 数据库 | PostgreSQL 16 |
+| 前端 | Vue 3 script setup · TypeScript · Element Plus · Pinia · Vue Router · ECharts |
+| 文档 | python-docx / docxtpl · matplotlib · ONLYOFFICE Document Server（可选） |
+| AI | OpenAI 兼容协议（OpenAI / DeepSeek 等任意兼容端点） |
+| 部署 | docker compose（PostgreSQL + backend + nginx 前端） |
+
+---
+
+## 安装与运行
+
+### 前置要求
+
+- Docker + Docker Compose
+- Python >= 3.11（本地开发用）
+- Node.js >= 20（本地开发前端用）
+
+### 1. 拿代码
 
 ```bash
+git clone https://github.com/Miata-RX7/ReportPilot.git
+cd ReportPilot
+```
+
+### 2. 生成两个必填密钥
+
+```bash
+# ENCRYPTION_KEY —— 用于加密数据源凭据 / SMTP 密码 / AI Key
 python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
-```
 
-生成 JWT_SECRET：
-
-```bash
+# JWT_SECRET —— 用于签发登录令牌
 python -c "import secrets; print(secrets.token_urlsafe(64))"
 ```
 
-创建管理员账号并获取 token：
+### 3. 写 `.env`
 
 ```bash
+cd backend
+cp .env.example .env
+```
+
+把上一步两行输出填进 `.env`：
+
+```ini
+ENCRYPTION_KEY=<第 2 步的 Fernet 密钥>
+JWT_SECRET=<第 2 步的随机串>
+```
+
+> 这两个密钥**缺失或格式非法会启动即报错**（fail-fast），不会静默降级。
+> `.env` 已在 `.gitignore` 里，**不要提交**。
+
+### 4. 起服务
+
+**方式 A · 全容器（推荐）**
+
+```bash
+cd backend
+docker compose --profile prod up -d --build
+docker compose exec backend alembic upgrade head
+```
+
+打开 <http://localhost:8080>。
+
+**方式 B · 本地开发（前端热更新）**
+
+```bash
+# 终端 1 —— 只起数据库，后端在宿主机跑（.env 与热重载都最直观）
+cd backend
+docker compose up -d db
+pip install -r requirements.txt
+alembic upgrade head
+uvicorn app.main:app --reload            # http://localhost:8000
+```
+
+```bash
+# 终端 2 —— 前端
+cd frontend
+npm install
+npm run dev                             # http://localhost:5173
+```
+
+`vite.config.ts` 已把 `/api` 代理到 `http://localhost:8000`，无需处理 CORS。
+
+### 端口
+
+| 服务 | 端口 |
+| --- | --- |
+| 前端（nginx） | `8080` |
+| 后端 API | `8000` |
+| PostgreSQL | `5432` |
+| 前端 dev server | `5173` |
+| ONLYOFFICE（可选） | `8081` |
+
+---
+
+## 配置项
+
+完整列表见 `backend/.env.example`，最常改的几项：
+
+| 变量 | 必填 | 说明 |
+| --- | :---: | --- |
+| `ENCRYPTION_KEY` | 是 | Fernet 密钥，加密一切敏感凭据 |
+| `JWT_SECRET` | 是 | 登录令牌签名密钥 |
+| `DATABASE_URL` | | 默认指向本地 `reportpilot` 库 |
+| `STORAGE_DIR` | | Word 模板与生成报告的存放目录，默认 `./storage` |
+| `AI_BASE_URL` / `AI_MODEL` / `AI_API_KEY` | | 任意 OpenAI 兼容端点；也可在系统设置页填 |
+| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USERNAME` / `SMTP_PASSWORD` / `SMTP_FROM` | | 邮件推送；也可在系统设置页填 |
+| `APP_BASE_URL` | | **浏览器与邮件可达**的对外地址，用于拼确认链接 |
+| `REPORT_TIMEZONE` | | cron 求值时区。容器是 UTC，不设会导致时刻错位 8 小时 |
+| `SCHEDULER_ENABLED` | | **多副本部署时只在一个副本设 true**，否则任务会重复触发 |
+| `PUBLIC_BASE_URL` | | ONLYOFFICE 回拉后端文件 / 回调用的地址（容器内网名） |
+| `ONLYOFFICE_URL` / `ONLYOFFICE_INTERNAL_URL` / `ONLYOFFICE_JWT_SECRET` | | 三项齐全才启用在线编辑，否则自动降级为只读预览 |
+
+> **页面优先**：`SMTP_*` 与 `AI_*` 在系统设置页保存后会**覆盖 `.env` 的默认值**并立即生效
+> （密钥字段加密落库，接口只回是否已配置），不需要重启服务。
+
+---
+
+## 创建账号
+
+系统**不预置任何账号**，用 CLI 创建：
+
+```bash
+cd backend
+
+# 创建（密码交互式输入，不进 shell history）
 docker compose exec backend python -m app.cli create-user --username admin --role admin
+
+# 忘记密码时重置
+docker exec -it reportpilot-backend python -m app.cli reset-password --username admin
+
+# 临时签发令牌排查问题
 docker compose exec backend python -m app.cli issue-token --username admin --days 7
 ```
 
-## 用户与密码管理（CLI）
+`--role` 取 `admin` 或 `user`。密码 **argon2id 单向哈希**，忘记无法找回明文，只能重置。
 
-密码以 argon2id **单向哈希**存储，忘记后无法找回明文，只能重置：
+---
 
-```bash
-# 交互式重置（推荐：密码不回显、不进 shell history）
-docker exec -it reportpilot-backend python -m app.cli reset-password --username ops
+## ONLYOFFICE：模板在线编辑（可选）
 
-# 自动化脚本才用 --password（会进入 shell history，谨慎使用）
-docker exec reportpilot-backend python -m app.cli reset-password --username ops --password 'NewPass123'
-```
-
-- 只改密码，**不改**角色与启用状态；需要改角色用 `create-user` 语义外的直接维护。
-- 兼容历史 `password_hash` 为空的账号（如种子 `admin`），此时输出"密码已设置"。
-- 密码长度至少 8 位；命令不会回显密码，也不写入日志。
-- 仍无法登录时（用户被停用等），用 `issue-token` 临时签发 JWT 排查。
-
-## 前端
-
-两种运行模式：
-
-**开发**（容器只跑 db + backend，前端在宿主机热更新）：
-
-```bash
-# 终端 1
-cd backend && docker compose up -d db backend
-# 终端 2
-cd frontend && npm install && npm run dev    # http://localhost:5173
-```
-
-`vite.config.ts` 已配置 `/api` 代理到 `http://localhost:8000`，无需处理 CORS。
-
-**生产**（nginx 独立容器，FastAPI 只管 API）：
-
-```bash
-cd backend && docker compose --profile prod up -d --build
-# 前端 http://localhost:8080，/api 由 nginx 反代到 backend:8000
-```
-
-前端质量检查：
-
-```bash
-cd frontend
-npm test          # vitest：utils 与 axios 拦截器
-npm run typecheck # vue-tsc
-npm run build     # 类型检查 + 生产构建
-```
-
-## 模板在线编辑（ONLYOFFICE Document Server）
-
-模板弹窗内"预览原始文档"与"在线编辑"由 ONLYOFFICE Document Server（DS）驱动：
-预览用只读 viewer（`mode=view`），编辑用 `mode=edit`；编辑保存时 DS 回调后端，
-落盘为**新版本**并重扫占位符、自动清理失效绑定。
-
-**部署 DS**（与后端同网络，浏览器可达映射端口）：
+不部署也能用 —— 只是预览原始文档 / 在线编辑会降级为只读预览。
 
 ```bash
 docker run -d --name reportpilot-ds \
   --network backend_default --network-alias onlyoffice \
   -p 8081:80 \
-  -e JWT_ENABLED=true -e JWT_SECRET=<与后端一致的密钥> -e JWT_HEADER=Authorization \
+  -e JWT_ENABLED=true -e JWT_SECRET=<与 ONLYOFFICE_JWT_SECRET 一致> -e JWT_HEADER=Authorization \
   onlyoffice/documentserver:latest
-docker exec reportpilot-backend python -c "import urllib.request; print(urllib.request.urlopen('http://onlyoffice/healthcheck').read())"
 ```
 
-**后端 `.env` 配置**（三项齐全才启用，否则前端降级为提示"未配置"）：
+后端 `.env` 补四项。三个容易踩的点：
 
-| 变量 | 说明 | 示例 |
-| --- | --- | --- |
-| `ONLYOFFICE_URL` | **浏览器**可达的 DS 地址（前端加载 `api.js`） | `http://localhost:8081` |
-| `ONLYOFFICE_INTERNAL_URL` | **后端容器**可达的 DS 地址（下载保存回调里的文件） | `http://onlyoffice` |
-| `ONLYOFFICE_JWT_SECRET` | 与 DS 的 `JWT_SECRET` 一致 | 32+ 字符随机串 |
-| `PUBLIC_BASE_URL` | **DS** 回拉后端文件/回调的后端地址 | `http://reportpilot-backend:8000` |
+1. `ONLYOFFICE_URL` 是**浏览器**可达的地址（`http://localhost:8081`）
+2. `ONLYOFFICE_INTERNAL_URL` 是**后端容器**可达的地址（`http://onlyoffice`）。
+   DS 回调里的下载 URL 用的是它自己的视角（常是 `localhost`），后端拿那个 host 连不通，
+   会返回 `{"error":1}`；后端会把这个 URL 的 scheme+host 改写成内网可达地址，path/query 原样保留
+3. `PUBLIC_BASE_URL` 是 DS 回拉后端文件 / 回调的后端地址
 
-说明：容器内联调时 `ONLYOFFICE_URL` 需指向浏览器可达名字（如网络别名 `http://onlyoffice`）；
-宿主机浏览器使用 `http://localhost:8081`。DS 拉取文件与回调均使用短期 HMAC 一次性 token，
-回调体再做 JWT 校验。
+保存语义：status=2（用户保存）会下载并落为新版本；status=6（强制保存）只确认不建版本；
+status=3/7（出错）只记日志不重试 —— 一次编辑只产生一个版本。
 
-> **`ONLYOFFICE_INTERNAL_URL` 为何必需**：DS 回调里的文档下载 URL 由 DS 按**自己的视角**
-> 生成（host 常是 `localhost` 或容器本地名）。后端容器解析不了这些名字，会导致
-> `保存文件时出错`（回调返回 `{"error":1}`）。后端会把该 URL 的 scheme+host 改写成
-> `ONLYOFFICE_INTERNAL_URL`，path/query（含 md5/expires 校验参数）原样保留；未配置时
-> 退回使用 DS 原始 URL。
+---
 
-### 保存语义（避免一次编辑产生多个版本）
-
-| 回调 status | 含义 | 行为 |
-| --- | --- | --- |
-| 2 | 用户点保存 / 关闭文档 | 下载 → 重扫占位符 → **落盘为新版本** |
-| 6 | 强制保存（`forcesave` 定时触发） | 直接确认 `{"error":0}`，**不下载、不建版本** |
-| 3 / 7 | 保存出错 | 记日志并确认，避免 DS 反复重试 |
-
-另外，status=2 下载到的内容若与当前版本字节完全一致（DS 关闭时可能重复回调），
-会跳过新建版本。因此一次编辑只产生一个版本。
-
-## 升级步骤（阶段 3 图表渲染）
-
-从旧版本升级到含图表渲染的版本，**必须按顺序做两步**，否则会出现
-"前端看不到独占/混排标记"或"容器重启后 matplotlib 丢失"：
-
-```bash
-# 1) 重建后端镜像并重建容器（阶段 3 新增了 matplotlib 与中文字体层，
-#    旧镜像里没有；仅 restart 容器不会带入新镜像内容）
-docker compose build backend
-docker compose up -d --force-recreate backend
-
-# 2) 重建前端镜像（绑定矩阵的独占/混排标记、饼图图标等前端资源）
-docker compose build frontend
-docker compose up -d --force-recreate frontend
-```
-
-3. 浏览器 **Ctrl+F5 强刷**（模板页的独占/混排标记依赖新的 JS 产物）。
-
-**验证是否升级成功**：
-- 打开模板管理 -> 任一模板 -> 「配置绑定」，每个占位符左侧应出现
-  `独占`（绿）或 `混排`（黄）标签
-- 后端健康：`docker exec <backend> python -c "import matplotlib; print(matplotlib.__version__)"`
-
-> 字体说明见下方「图表渲染」小节；若出现生僻字豆腐块，需改用
-> `fonts-noto-cjk` 重新构建后端镜像。
-
-## 图表渲染（曲线图 / 饼图 -> Word 内嵌 PNG）
-
-绑定到模板的 curve / pie 指标会以 **PNG 图片**插入 Word（matplotlib 渲染 +
-docxtpl `InlineImage`）。相关约束与实现要点：
-
-**段落独占要求（硬约束）**
-`{{ var }}` 必须在 Word 里**独占一个段落**（去掉首尾空白后整段只有这个变量）。
-绑定时校验，混排返回 422。原因是 docxtpl 0.20.2 对混排**也会**插图（不会静默
-跳过），但 140mm 宽的行内图片会被挤在文字中间，版式不可控。若将来确需混排，
-可加 `allow_inline_chart` 逃生开关（当前不做）。
-
-**PNG 不落盘**：`chart_renderer.render_fact_chart()` 返回 PNG **字节**，
-调用方用 `BytesIO` 包成 `InlineImage`。没有临时文件、没有清理逻辑、没有孤儿
-文件；报告重新生成时重跑 `compute` -> 重新画即可，不依赖任何缓存失效。
-
-**数字格式化的两套口径（有意不一致，勿"顺手统一"）**
-- **Y 轴刻度**：辅助参考 -> 紧凑格式（`1234567 -> 1.23M`）。曲线原始值常是 bps
-  量级，按 `display_precision` 会得到 `5000000.00` 这类长刻度，反而更难读。
-- **数据标注**（图内最大/均值/末值）：精读值 -> 千分位 + 最多 2 位小数
-  （`4,862,609`）；指标配了 `display_precision` 时按其位数。与
-  `format_fact_value` 的 `%g` 略有差异是刻意的：图上要可读性。
-
-**中文字体**
-镜像内安装 `fonts-wqy-microhei`（仅 +1.6MB，覆盖 GB2312 + 常用简中），
-字体链 `['WenQuanYi Micro Hei', 'DejaVu Sans']`，并设 `axes.unicode_minus=False`
-（否则负号显示为方块）。**若实测出现生僻字豆腐块**，改用 `fonts-noto-cjk`
-（+56MB 下载 / 解压约 200MB，覆盖更全），改 Dockerfile 后重新构建镜像即可。
-字体缺失不阻塞报告生成：仅记 warning 并退回默认字体。
-
-**其它**
-- `InlineImage` 与 `SandboxedEnvironment` **兼容**，无需为图片放宽 Jinja 沙箱。
-- 构造 `InlineImage` 前后**不要**调用 `tpl.get_xml()`（会让 `_inline_shapes`
-  置空，后续插图报 `'NoneType' object has no attribute '_element'`）。
-  正确模式：`open_template()` -> 造 `InlineImage` -> `render_docx(tpl=同一实例)`，
-  preview 与 report 两条链路都遵循此模式。
-- 多个图表要产生多个 `word/media` 条目，必须用**不同内容**的图片（python-docx
-  按内容哈希去重）。
-- 独占信息（`is_alone_in_paragraph`）**不落库**，按需解析当前版本 docx 得出，
-  始终反映文件真实状态；`placeholders_json` 仍是 `list[str]`，无数据迁移。
-- 曲线/饼图指标在报告详情页的 facts 表里只给摘要行，facts 行左侧有趋势图图标。
-
-## 安全注意事项
-
-- `ENCRYPTION_KEY`、`JWT_SECRET`、`SMTP_PASSWORD`、`ONLYOFFICE_JWT_SECRET` 等敏感配置只放
-  `.env`（已在 `.gitignore`），**禁止提交到 Git**。
-- 数据源 API token 以 Fernet 加密存储（`secret_encrypted`），接口只返回脱敏提示。
-- 系统设置页保存的 SMTP 密码 / AI API Key 同样以 Fernet 加密落库（`app_settings` 表，
-  迁移 `0012`），接口只返回"是否已配置"；再次编辑时留空表示**不修改**原密钥。
-  `.env` 仍是默认值来源，页面保存的项覆盖默认值，无需重启服务。
-
-## 部署清单（生产前必读）
-
-- **自签名证书**：若 Zabbix / AI 端点使用自签名证书，需把站点 CA 证书挂入
-  backend 容器（如挂载到 `/usr/local/share/ca-certificates/` 并
-  `update-ca-certificates`），然后开启 `verify_ssl=true`。
-  `verify_ssl=false` 仅限测试环境（Phase 2 处理，Phase 1 接受）。
-- **生产 PG 日志收紧**：默认 PG 日志可能记录完整查询字符串（如报错语句）。
-  生产环境建议调整 `log_min_error_statement=error`、关闭
-  `log_statement`，避免 `db.log` 出现查询内容（Phase 2 处理，Phase 1 接受）。
-
-## Phase 1 临时方案声明
-
-- **issue-token**：前端登录页 Phase 2 才做，过渡期用
-  `python -m app.cli issue-token` 手动签发 JWT 供调试；登录页上线后移除该子命令。
-- **登录防暴力**：login 端点仅有固定 500ms 延时，Phase 2 换正式限流。
-- **报告同步生成**：`POST /api/reports` 同步等待完成，部署时反向代理 /
-  uvicorn 单请求超时应 >= 5 分钟；前端调用期间需展示"生成中"提示。
-
-## 技术债（Phase 2 偿还）
-
-- `frontend/src/components/DataTable.vue` 的 `data` 属性放宽为 `any[]`，
-  待各列表实体类型稳定后改为泛型 `DataTable<T>` 以获得行级类型检查。
-- 前端 UI 验证脚本（headless chrome）的行匹配目前按 `name` 子串，
-  存在同名/前缀重复时误命中风险，应改为按后端 `id` 定位行。
-
-## 文件命名约定（API）
-
-- **预览文件**：`preview_{模板名}_{period}.docx`
-  由 `POST /api/templates/{id}/preview` 通过 `Content-Disposition: filename=`
-  返回（如 `preview_运维月报模板_2026-08.docx`）。比用 id 命名更直观，
-  且与下方报告邮件附件命名口径一致。前端 `TemplatesView` 下载时优先取
-  `Content-Disposition` 中的该文件名。
-- **报告产物**：`report_{报告id}_{period}.docx`
-  由 `GET /api/reports/{id}/download` 返回；推送邮件的附件名则用
-  `{模板名}_{period}.docx`（同预览口径，不含 id）。
-
-## 模板版本与授权（API）
-
-数据模型：`WordTemplate`（逻辑模板：名称/属主/当前版本快照）+ `TemplateVersion`
-（版本：文件与占位符，支持回滚）+ 版本级 `TemplateBinding` + `TemplateGrant`（授权）。
-`Report` 记录 `version_id`，生成报告使用模板的**当前版本**，历史报告可追溯当时版本。
-
-权限：admin 与属主 = `manage`；被授权 `edit` = 可编辑文档 + 绑定；被授权 `view` = 只读。
-列表与所有操作均按权限过滤。
-
-| 方法 | 路径 | 权限 | 说明 |
-| --- | --- | --- | --- |
-| POST | `/api/templates` | 登录用户 | 上传（上传者成为属主），创建版本 v1 |
-| GET | `/api/templates` | 登录用户 | 仅返回可见模板（属主/被授权/管理员） |
-| GET | `/api/templates/{id}` | view | 详情（含当前版本、绑定、权限） |
-| GET | `/api/templates/{id}/file` | view（或签名 token） | 原始 docx |
-| POST | `/api/templates/{id}/editor?mode=view\|edit` | view / edit | ONLYOFFICE 配置（含签名 JWT） |
-| POST | `/api/templates/{id}/callback?token=` | 签名 token | DS 保存回调 → 新版本 |
-| GET | `/api/templates/{id}/versions` | view | 版本列表 |
-| POST | `/api/templates/{id}/versions/{vid}/activate` | edit | 回滚为当前版本 |
-| PUT | `/api/templates/{id}/bindings` | edit | 全量替换**当前版本**绑定 |
-| GET/PUT | `/api/templates/{id}/grants` | manage | 查看/全量替换授权 |
-| POST | `/api/templates/{id}/transfer` | manage | 转移属主 |
-| DELETE | `/api/templates/{id}` | manage | 软删除 |
-| GET | `/api/users` | 登录用户 | 用户列表（授权选择用） |
-
-新版本语义：以当前版本为基准复制绑定，按新占位符集合自动清理失效项（`cleared`）；
-新增变量需重新配置绑定。
-
-## 指标类型（metric_type）
-
-指标按用途分五类，决定 `query_config` 形态与 `calc_engine` 的计算分支：
-
-| 类型 | 用途 | 取数配置 | `MetricFact.value` | 状态 |
-| --- | --- | --- | --- | --- |
-| `scalar` | 数值（多 item 聚合） | `item_ids` 多选 | `float`（已应用 `transform`） | 阶段 1 |
-| `text` | 文本（最新值 / 固定文案） | `item_ids` 0~1 个 | `{"text": str}` | 阶段 1 |
-| `curve` | 折线图（每 item 一条曲线） | `series[]` | `{"series": [...]}` | 阶段 2 |
-| `pie` | 饼图（UP/DOWN 占比） | `item_ids` 恰好 1 个 | `{"up_count","down_count","up_pct","down_pct"}` | 阶段 2 |
-| `time` | 时间（当前时间 + 偏移 + 自定义格式） | **无**（不取数） | `{"text": str}`（复用 text 形态） | 阶段 4 |
-
-### time（时间类型）
-
-不取数、不需要数据源：基准是**计算时刻**（试算 / 生成报告的那一刻），按偏移量平移，
-再用自定义格式模块渲染成文本。
-
-```jsonc
-{
-  "metric_type": "time",
-  "data_source_id": null,          // 唯一允许为空的类型
-  "query_config": {},              // 不取数
-  "type_config": {
-    "time_config": {
-      "format_modules": ["年", "-", "月"],  // 有序，可重复
-      "zero_pad": true,                     // 月/日/时/分/秒补零；年始终 4 位
-      "offset_value": -1,                   // 正数向后、负数向前
-      "offset_unit": "month"                // day | month
-    }
-  }
-}
-```
-
-- **模块词表**：字段 `年 月 日 时 分 秒` + 字面量 `空格 - / : .`；白名单校验，
-  非白名单一律 422。同一模块可重复（`[年, 年]` -> `20262026`）。
-- **示例**：`2026-10` 偏移 `-1 月` -> `2026-09`。
-- **补零**：`zero_pad=true` 时 `2026-09`；关闭时 `2026-9`（年始终 4 位）。
-- **月偏移自动夹取月末**：`2026-03-31 -1 月` -> `2026-02-28`（闰年 `2028-02-29`），
-  不会溢出到 3 月（后端用 `relativedelta`，前端用 `setMonth` + 月天数夹取）。
-- **基准是计算时刻**（不是统计周期）：同一指标在不同时刻试算可能得到不同结果，
-  报告重新生成时也会重算。`MetricFact.object` / `formula` 会写明基准时刻与偏移量，
-  便于追溯。`formula` 形如 `now(-1月) -> format('年-月')`。
-- **渲染口径双实现**：后端 `calc_engine.format_time_modules` 与前端
-  `utils/time.ts::formatTimeModules` 语义必须一致，两侧都有同批单测锁定。
-- 复用 `value_shape="text"`，因此可直接绑定到模板变量（不需要独占段落），
-  报告里就是一段文本。
-
-### 通用约定
-- **`POST /api/metrics` 与 `PUT /api/metrics/{id}` 必须显式传 `metric_type`**（breaking change，
-  缺省返回 422）。后端用 Pydantic discriminated union 精确校验；**库内历史数据**由
-  迁移 `0008` 回填为 `scalar`，库级 CHECK 约束 `ck_metric_type` 保证合法值。
-- `calc_formula`（agg/compare/baseline_lookback）**仅 scalar 使用**；其余配置放
-  `type_config`（`transform` / `text_config` / `pie_config` / `transform_default` /
-  `time_config`）。
-- `data_source_id` 对 `time` 类型允许为 `null`（迁移 `0009` 放宽 NOT NULL），
-  **其余类型必填**，缺失返回 422。
-- scalar 数值变换：`value = raw * mul + add`（本期与基线同口径，`change_pct` 基于变换后数值）。
-
-### curve（阶段 2）
-- 所有 series 的 `item_id` **合并成一次 `trend.get`**（N 条曲线仍 1 次 RPC）。
-- 逐点应用该 series 自己的 `transform`；`points` 按 unix_ts **升序**。
-- **缺失小时不补点**（不插 null）；前端 ECharts 用 `xAxis.type='time'`（多序列时间戳
-  可能不对齐，category 轴会误导）。
-- 上限 `type_config.max_series`（默认 12），超限直接报错；不做降采样（一个月最多
-  744 点/series）。不做基线对比，`baseline_value` / `change_pct` 恒为 `null`。
-
-### pie（阶段 2）
-- 单 item；**统计口径用 `value_max`**：该小时命中 `up_values` 记 UP，命中
-  `down_values` 记 DOWN。不用 `value_avg` 是因为 0/1 型 item 在某小时内既有 0 又有 1
-  时 avg 会得到 0.5，使"小时数占比"失真。
-- `unknown_mode`：`exclude` 未命中小时不计入分母；`error` 直接报错。
-- `up_pct` / `down_pct` 保留位数跟 `display_precision`：`null` → 1 位，指定 N → N 位。
-- 前端 ECharts 饼图渲染（`echarts/core` + `PieChart` 按需引入）。
-
-### pie 适用性判定
-`POST /api/datasources/{id}/analyze-pie-suitability`，body `{host_group_ids, host_ids, item_id}`。
-- 窗口 **7 天**、超时 **5 秒**；超时返回 `suitable="unknown"`，不硬失败。
-- 判定顺序：非数值型（`value_type` ∉ {0,3}）→ 不适合；读 item 的 value map
-  （Zabbix 6.0+ 走 `selectValueMap`，取 `valuemap.mappings[]` 的 `value`→`newvalue`）；
-  统计 `value_max` 的 distinct：2 个 → high（建议小值 DOWN、大值 UP），3~5 个 →
-  medium（不自动填，由用户确认），>5 个 → 不适合。
-- `key_` 命中 `icmpping/icmp/ping/status/state` → 置信度提升一级。
-- 前端：`suitable=false` 展示原因，需勾选「我了解风险」才允许保存（不硬阻断）。
-
-### 模板绑定护栏
-阶段 3 图表渲染上线前，**curve / pie 指标禁止绑定到模板**（`PUT /api/templates/{id}/bindings`
-返回 422），避免产出把结构化 dict 塞进 Word 的坏报告。绑定页对这两类指标显示
-「阶段 3 支持绑定模板」标注，阶段 3 放开。
-
-### MetricFact.value 与 value_shape
-
-`MetricFact.value` 为 **`float | dict`**，由同级的 **`value_shape`** 告知消费端如何解析：
-
-| `value_shape` | `value` 原始结构 | 消费方 |
-| --- | --- | --- |
-| `scalar` | `float` | 按 `display_precision` 格式化 |
-| `text` | `{"text": "本月无异常"}` | 取 `payload.text`（**不是裸字符串**） |
-| `series` | `{"series": [{"name","item_id","points": [[ts, v], ...]}]}` | 阶段 2 折线图 / 阶段 3 图表 PNG |
-| `pie` | `{"up_count","down_count","up_pct","down_pct"}` | 阶段 2 饼图 / 阶段 3 图表 PNG |
-
-- 字段名说明：设计稿里该字段名为 `value_type`，实现改名为 **`value_shape`**，以免与
-  Zabbix 监控项的 `value_type`（`0`=浮点 / `3`=无符号整数）混淆。语义与设计一致。
-- **历史兼容**：`GET /api/reports/{id}` 原样返回落库的 `facts_json`，**不会回填
-  `value_shape`**；缺该字段时一律**按 `scalar` 解析**（后端默认 `"scalar"`，前端
-  `factShape()` 用 `?? 'scalar'`）。阶段 1 之前生成的报告无需任何数据迁移。
-
-## 测试
+## 验证安装是否成功
 
 ```bash
 cd backend
-pytest
+
+docker compose ps                                              # 容器都在 Up
+docker compose exec backend alembic current                    # 期望 0017 (head)
+curl -s http://localhost:8080/api/health                       # 期望 {"status":"ok",...}
+curl -s -o /dev/null -w '%{http_code}\n' http://localhost:8080/  # 期望 200
 ```
+
+然后走一遍最小闭环：
+
+1. 数据源管理页建一个 Zabbix 数据源 —— 保存后凭据只回显末 4 位
+2. 指标管理页建一个 `scalar` 指标 —— 试算通过
+3. 模板管理页上传 Word —— 自动扫出占位符 —— 配置绑定
+4. 报告任务页建一个月报任务 —— 生成 docx —— 在报告详情里核对 facts 与 AI 文字
+
+---
+
+## 开发与测试
+
+```bash
+# 后端（基线 711 passed）
+cd backend
+pytest
+
+# 前端（199 个 vitest 用例）
+cd frontend
+npm test
+npm run typecheck
+npm run build
+```
+
+> `backend/` 与 `frontend/` 里**不要留** `_*.py` 这类一次性脚本 —— 它们不被 pytest 收集，
+> 却会污染目录并跟着仓库分发。临时脚本请放进 `_attic/`（已 gitignore）。
+
+---
+
+## 安全须知
+
+- **`.env` 不入库**（已在 `.gitignore`）；`ENCRYPTION_KEY` / `JWT_SECRET` 必须显式配置，缺失即启动失败
+- 数据源 token、SMTP 密码、AI API Key 一律 **Fernet 加密**落库；
+  接口只返回 `secret_hint` 或 `*_secret_set` 布尔，**任何响应、日志、异常里都不出现明文**
+- 密码 **argon2id 单向哈希**
+- 日志中不出现 `Authorization` / `Bearer` 字样
+- 报告文件与 ONLYOFFICE 回调用**短期一次性 token**，回调另有 JWT 校验
+- **AI 不算数**：数值由汇算引擎产出，AI 只写文字，且其输出的每个数字都必须能在 facts 里找到出处
+
+---
+
+## 延伸文档
+
+| 文档 | 内容 |
+| --- | --- |
+| [`docs/technical-reference.md`](docs/technical-reference.md) | 技术参考：API 一览、权限矩阵、指标类型与 `MetricFact` 结构、图表渲染硬约束、升级步骤、部署清单、已知技术债 |
+| [`docs/smoke_test.md`](docs/smoke_test.md) | 端到端冒烟测试步骤（13 步） |
+| [`docs/smoke_test_auth.md`](docs/smoke_test_auth.md) | 带认证的冒烟测试变体 |
+| [`docs/smoke_test_report.md`](docs/smoke_test_report.md) | 冒烟测试执行报告与已修缺陷 |
+| [`AGENTS.md`](AGENTS.md) | 项目上下文、不可破坏的红线、已知坑（给 AI 助手与接手人看） |
+| [`ReportPilot_Design_Token.md`](ReportPilot_Design_Token.md) | 设计 token 规范（`frontend/src/styles/tokens.scss` 的源头） |
+
+## License
+
+[MIT](LICENSE)
