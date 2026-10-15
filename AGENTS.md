@@ -31,7 +31,7 @@
 | `backend/tests/` | pytest，**基线 711 passed**（在目标服务器裸容器里跑；本机只能单文件跑） |
 | `frontend/src/views/` | 页面（`SystemSettingsView`、`ReportTasksView` 等） |
 | `frontend/src/api/` | axios 封装，按资源分文件 |
-| `docs/` | 端到端冒烟测试**文档**（`smoke_test.md` 步骤 → `smoke_test_report.md` / `smoke_test_auth.md` 执行报告，三者互相引用，别拆） |
+| `docs/` | 文档：`technical-reference.md` **技术参考手册**（API 一览 / 指标类型 / 图表渲染硬约束 / 升级步骤 / 技术债，原 `README.md` 于 2026-10-15 迁入）、`smoke_test*.md` 冒烟测试三件套（步骤 → 执行报告 → 带认证变体，互相引用，别拆） |
 | `_attic/` | **归档区，已 gitignore**（只入库 `README.md` 清单）：废弃的原型 / 生成物 / 一次性脚本都移这里，文件保留在磁盘但不再分发。见 `_attic/README.md` |
 | `.workbuddy/memory/` | 项目长期笔记（`MEMORY.md` 是索引） |
 
