@@ -93,7 +93,10 @@
     **规矩**：临时脚本一律不要落在 `backend/` 或 `frontend/` 根层 —— 要么当场删，要么写进 `_attic/`（已 gitignore）；
     提交前用 `git ls-files | Select-String '_.*\.py$'` 扫一遍。
     另：首次提交把 `docs/artifacts/*.docx`（含真实设备名/带宽）推到了 public 仓库，
-    **归档只是停止继续分发，历史提交里仍能取回** —— 这类真实数据产物一开始就不该入库。
+    **2026-10-15 已用 `git filter-repo --path docs/artifacts --invert-paths` 重写历史并强推清除**；
+    同一次改写用 `--replace-text` 把历史里 `AGENTS.md` 的内网地址 / SSH 端口 / 密钥名一并脱敏
+    （改写前的历史打包在 `ReportPilot-history-backup.bundle`，**含未脱敏内容，不要提交**）。
+    教训：**真实数据产物一开始就不该入库** —— 归档只是停止继续分发，历史提交里仍能取回。
 
 ---
 ## 4. 本地环境现状（2026-10-14 实测）
