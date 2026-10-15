@@ -63,8 +63,18 @@
 4. `python:3.11-slim` 镜像需 `build` 才能拿到新增依赖（曾缺 `dateutil`、matplotlib）。
 5. **不要在容器内直接跑 pytest**（会生成 root 属主 `.pytest_cache`，导致 uvicorn `--reload` 的 watchfiles 崩溃），用 `-p no:cacheprovider`。
 6. DeepSeek `model` 字段必须传**模型 ID**（`deepseek-flash`），不是 `GET /models` 的展示名。
-7. `backend/` 目录下有两个误生成的垃圾文件：`=3.9,`、`m_empty2.json`（`pip install "matplotlib>=3.9,"` 少了空格，
-   被 shell 当重定向创建）。**2026-10-15 已移入 `_attic/root-scratch/`**。
+7. **命令里的 Windows 路径会在 Linux 服务器上生成垃圾文件**（同一类失误已出现 3 次，务必警惕）：
+   - 本地 `backend/=3.9,`：写 `pip install "matplotlib>=3.9,"` 时 `>` 前少了空格，shell 当重定向创建了文件
+   - 服务器 `/opt/reportpilot/cfg-card-ai:0` / `:1`：发布时把前端 `data-testid` 误当输出文件
+   - **服务器 `backend/c:Userspaul_zhouDocumentslivecomReportPilotbackendapp` 等 7 个空目录**：
+     把 `C:\Users\paul_zhou\Documents\livecom\ReportPilot\backend\...` 原样丢给 Linux 命令，
+     反斜杠被当转义吃掉，退化成相对路径名，于是凭空造出一串目录
+   - **共同根因**：**从 PowerShell 往 ssh 传命令时，反斜杠 / `>` / `:` 会被二次解析**。
+     凡是路径一律用**服务器绝对路径 + 正斜杠**（`/opt/reportpilot/backend`），
+     多行远程脚本先落地成 `.sh` 再执行，**不要把 Windows 路径或本地相对路径写进远程命令**。
+   - 2026-10-15 已全部清理；`backend/` 属 Docker 构建上下文（`COPY . .`），这些垃圾会进镜像，
+     **每次发布后顺手扫一遍**：
+     `find . -maxdepth 4 \( -name '*:*' -o -name '*=*' -o -name '_*.py' \) -print`
 8. **AI 数字自检必须先摘日期**：`_NUMBER_RE` 会把期间 `2026-09` 切成 `2026` 与伪负数 `-09`，范文里的 `2026年9月` 还会切出 `9`。
    任何新增的数字扫描入口都要先过 `ai_insight._mask_dates()`，否则会误报「未溯源」或触发无谓重试。
 9. **本机 Python 3.14、生产镜像 3.11**：注解求值时机不同（PEP 649 延迟求值）。
