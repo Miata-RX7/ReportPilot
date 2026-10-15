@@ -31,7 +31,8 @@
 | `backend/tests/` | pytest，**基线 711 passed**（在目标服务器裸容器里跑；本机只能单文件跑） |
 | `frontend/src/views/` | 页面（`SystemSettingsView`、`ReportTasksView` 等） |
 | `frontend/src/api/` | axios 封装，按资源分文件 |
-| `docs/` | 端到端冒烟测试文档（`smoke_test*.md`） |
+| `docs/` | 端到端冒烟测试**文档**（`smoke_test.md` 步骤 → `smoke_test_report.md` / `smoke_test_auth.md` 执行报告，三者互相引用，别拆） |
+| `_attic/` | **归档区，已 gitignore**（只入库 `README.md` 清单）：废弃的原型 / 生成物 / 一次性脚本都移这里，文件保留在磁盘但不再分发。见 `_attic/README.md` |
 | `.workbuddy/memory/` | 项目长期笔记（`MEMORY.md` 是索引） |
 
 ---
@@ -62,7 +63,8 @@
 4. `python:3.11-slim` 镜像需 `build` 才能拿到新增依赖（曾缺 `dateutil`、matplotlib）。
 5. **不要在容器内直接跑 pytest**（会生成 root 属主 `.pytest_cache`，导致 uvicorn `--reload` 的 watchfiles 崩溃），用 `-p no:cacheprovider`。
 6. DeepSeek `model` 字段必须传**模型 ID**（`deepseek-flash`），不是 `GET /models` 的展示名。
-7. `backend/` 目录下有两个误生成的垃圾文件：`=3.9,`、`m_empty2.json`，可删。
+7. `backend/` 目录下有两个误生成的垃圾文件：`=3.9,`、`m_empty2.json`（`pip install "matplotlib>=3.9,"` 少了空格，
+   被 shell 当重定向创建）。**2026-10-15 已移入 `_attic/root-scratch/`**。
 8. **AI 数字自检必须先摘日期**：`_NUMBER_RE` 会把期间 `2026-09` 切成 `2026` 与伪负数 `-09`，范文里的 `2026年9月` 还会切出 `9`。
    任何新增的数字扫描入口都要先过 `ai_insight._mask_dates()`，否则会误报「未溯源」或触发无谓重试。
 9. **本机 Python 3.14、生产镜像 3.11**：注解求值时机不同（PEP 649 延迟求值）。
@@ -83,6 +85,15 @@
     **新写子弹窗照抄这个写法**；仓库里其它弹窗（`TemplateVersionsDialog` / `TemplateGrantsDialog` /
     `TemplatePreviewDialog` / `OnlyofficeEditorDialog` / `ReportDetailDialog`）都已有 `immediate: true`。
     另：vitest 是 `environment: 'node'` 且没装 `@vue/test-utils`，**组件层没有单测**，这类时序 bug 只能靠真实点击验收。
+13. **AI 辅助开发会在源码目录留下 `_*.py` 残留，且大多是 0 字节空文件**（2026-10-15 清理）：
+    `backend/` 与 `frontend/` 根层共 79 个 `_*.py`（`_fix_*` / `_p3a_*` / `_add_tests*` / `_probe_*` / `_q1` / `_r1`…），
+    其中 **78 个是 0 字节**（落盘失败的残骸），只有 `backend/_e2e_time.py` 有真实内容（`time` 指标端到端手工脚本，
+    已移入 `_attic/backend-scripts/`）。它们**不被 pytest 收集，也不被任何代码引用**，但会污染目录、干扰 review，
+    一旦入库就跟着仓库分发（前端根本不该有 `.py`）。
+    **规矩**：临时脚本一律不要落在 `backend/` 或 `frontend/` 根层 —— 要么当场删，要么写进 `_attic/`（已 gitignore）；
+    提交前用 `git ls-files | Select-String '_.*\.py$'` 扫一遍。
+    另：首次提交把 `docs/artifacts/*.docx`（含真实设备名/带宽）推到了 public 仓库，
+    **归档只是停止继续分发，历史提交里仍能取回** —— 这类真实数据产物一开始就不该入库。
 
 ---
 ## 4. 本地环境现状（2026-10-14 实测）

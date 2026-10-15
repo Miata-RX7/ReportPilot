@@ -23,14 +23,6 @@ backend/_accept/
 .playwright-cli/
 *.log
 
-# 一次性排查/发布脚本与快照
-/rp-remote.sh
-/rp-unit-scale.tar.gz
-/rp-unit-scale.list
-/rp3-*.yaml
-/tpl.yml
-/save-confirm.yml
-
-# 误生成的垃圾文件（见 AGENTS.md §3.7）
-backend/=3.9,
-backend/m_empty2.json
+# 归档区：已废弃文件移入 _attic/，只保留清单 README 入库，内容不再分发
+_attic/*
+!_attic/README.md
