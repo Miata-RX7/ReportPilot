@@ -92,7 +92,7 @@
 | Docker 引擎 | **未运行**（`dockerDesktopLinuxEngine` 连接失败）→ 本机无法起服务 |
 | 前端 node / node_modules | npm 不在 PATH；改用 `~/.workbuddy/binaries/node/versions/24.14.0`（v24.14.0 + npm 11.9）。`npm ci` 约 30s，之后 `typecheck` / `test` / `build` 均可用 |
 | 后端 `backend/.venv` | 存在（**Python 3.14.5**），但**缺 matplotlib** → 整包 pytest 收集即失败；**单文件可以跑** |
-| git 仓库 | 无任何提交、无 remote（全部文件 untracked）→ 没有"推代码即发布"通道 |
+| git 仓库 | **2026-10-15 起已首次提交**（`c87d6f6`）并推到 GitHub `Miata-RX7/ReportPilot`（public，**仅代码备份，不是发布通道**）。本机 git 未配 `user.name/user.email`，提交用 `git -c user.name=... -c user.email=...` 单次生效即可 |
 
 结论：**本机已能做大部分验证** —— 前端全绿；后端整包 pytest 仍不可用（缺 matplotlib），
 改为「本机跑不依赖 matplotlib 的单文件 + 服务器裸容器跑全量」。
@@ -369,9 +369,12 @@ docker run --rm -v /opt/reportpilot/backend:/code -w /code reportpilot/backend:l
 ---
 ## 6. 部署（概要）
 
-服务器：`root@172.20.163.xxx:PORT_REDACTED`（密钥 `REDACTED_KEYNAME`），项目目录 `/opt/reportpilot`。
-**没有 git**，靠上传覆盖；覆盖前源码备份到 `/opt/reportpilot/deploy/backups/<日期-轮次>/`。
-连接参数与外部服务（Zabbix / DeepSeek / SMTP / ONLYOFFICE）见 `DEPLOY.local.md`。
+服务器连接参数（地址 / 端口 / 密钥路径）与外部服务凭据（Zabbix / DeepSeek / SMTP / ONLYOFFICE）
+一律见 `DEPLOY.local.md`（本地私有、已 gitignore，**不入库**）。项目目录 `/opt/reportpilot`。
+
+**2026-10-15 起本地已有 git**（首次提交 `c87d6f6`，远端 `origin` = GitHub 仓库 `Miata-RX7/ReportPilot`，public），
+但**发布仍走「上传覆盖」**：远端只是代码备份，不作为发布通道（`AGENTS.md` 等文档不写具体地址，避免公开内网信息）。
+覆盖前源码备份到 `/opt/reportpilot/deploy/backups/<日期-轮次>/`。
 
 标准流程：
 
