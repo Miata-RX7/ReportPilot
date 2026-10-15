@@ -116,7 +116,7 @@
 | Docker 引擎 | **未运行**（`dockerDesktopLinuxEngine` 连接失败）→ 本机无法起服务 |
 | 前端 node / node_modules | npm 不在 PATH；改用 `~/.workbuddy/binaries/node/versions/24.14.0`（v24.14.0 + npm 11.9）。`npm ci` 约 30s，之后 `typecheck` / `test` / `build` 均可用 |
 | 后端 `backend/.venv` | 存在（**Python 3.14.5**），但**缺 matplotlib** → 整包 pytest 收集即失败；**单文件可以跑** |
-| git 仓库 | **2026-10-15 起已首次提交**（`c87d6f6`）并推到 GitHub `Miata-RX7/ReportPilot`（public，**仅代码备份，不是发布通道**）。本机 git 未配 `user.name/user.email`，提交用 `git -c user.name=... -c user.email=...` 单次生效即可 |
+| git 仓库 | **2026-10-15 起已首次提交**（`8ffe9e9` 起）并推到 GitHub `Miata-RX7/ReportPilot`，**仅代码备份，不是发布通道**。全局身份已配（`C:/Users/paul_zhou/.gitconfig`，`user.name=zhou` / `user.email=paul_zhou92@outlook.com`），**直接 `git commit` 即可，不需要 `-c` 单次传参**；只有临时换作者时才用 `-c user.name=... -c user.email=...`（`-c` 不落盘） |
 
 结论：**本机已能做大部分验证** —— 前端全绿；后端整包 pytest 仍不可用（缺 matplotlib），
 改为「本机跑不依赖 matplotlib 的单文件 + 服务器裸容器跑全量」。
