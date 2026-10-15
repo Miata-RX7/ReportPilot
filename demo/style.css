@@ -1,0 +1,197 @@
+/* ReportPilot 演示页共用样式 */
+:root {
+  --bg: #f4f6fa;
+  --card: #ffffff;
+  --ink: #1f2733;
+  --ink-2: #5b6675;
+  --line: #e4e8ef;
+  --brand: #2563eb;
+  --brand-dark: #1e40af;
+  --brand-soft: #e8effe;
+  --green: #16a34a;
+  --green-soft: #e6f6ec;
+  --red: #dc2626;
+  --red-soft: #fdeaea;
+  --amber: #d97706;
+  --amber-soft: #fdf3e3;
+  --violet: #7c3aed;
+  --violet-soft: #f1eafd;
+  --mono: "Cascadia Code", Consolas, "Courier New", monospace;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+  background: var(--bg);
+  color: var(--ink);
+  line-height: 1.6;
+}
+a { color: var(--brand); text-decoration: none; }
+
+/* 顶部导航 */
+.topbar {
+  background: #16202e;
+  color: #dfe6f0;
+  padding: 0 24px;
+  display: flex;
+  align-items: center;
+  gap: 28px;
+  height: 56px;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+.topbar .logo { font-weight: 700; font-size: 17px; color: #fff; letter-spacing: .5px; }
+.topbar .logo span { color: #6ea8fe; }
+.topbar nav { display: flex; gap: 4px; }
+.topbar nav a {
+  color: #aeb9c9;
+  padding: 6px 14px;
+  border-radius: 6px;
+  font-size: 14px;
+}
+.topbar nav a:hover { color: #fff; background: rgba(255,255,255,.08); }
+.topbar nav a.active { color: #fff; background: var(--brand); }
+
+.wrap { max-width: 1120px; margin: 0 auto; padding: 28px 24px 64px; }
+
+.page-title { font-size: 24px; font-weight: 700; }
+.page-sub { color: var(--ink-2); margin-top: 4px; font-size: 14px; }
+.page-head { margin-bottom: 24px; }
+
+/* 卡片 */
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 20px 22px;
+  margin-bottom: 20px;
+  box-shadow: 0 1px 2px rgba(16,24,40,.04);
+}
+.card h2 { font-size: 17px; margin-bottom: 12px; }
+.card h3 { font-size: 15px; margin-bottom: 8px; }
+.muted { color: var(--ink-2); font-size: 13px; }
+
+/* 表格 */
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+th { color: var(--ink-2); font-weight: 600; font-size: 13px; background: #f8fafc; }
+tr:last-child td { border-bottom: none; }
+
+/* 徽章 */
+.badge {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.b-green { background: var(--green-soft); color: var(--green); }
+.b-red { background: var(--red-soft); color: var(--red); }
+.b-amber { background: var(--amber-soft); color: var(--amber); }
+.b-blue { background: var(--brand-soft); color: var(--brand); }
+.b-violet { background: var(--violet-soft); color: var(--violet); }
+.b-gray { background: #eef1f5; color: var(--ink-2); }
+
+/* 按钮 */
+.btn {
+  display: inline-block;
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--ink);
+  border-radius: 7px;
+  padding: 7px 14px;
+  font-size: 13px;
+  cursor: default;
+}
+.btn-primary { background: var(--brand); border-color: var(--brand); color: #fff; }
+.btn-danger-ghost { color: var(--red); border-color: #f2c1c1; }
+.btn-sm { padding: 4px 10px; font-size: 12px; }
+
+/* 代码/密钥 */
+.mono { font-family: var(--mono); font-size: 13px; }
+.secret { font-family: var(--mono); background: #f2f4f8; border-radius: 5px; padding: 1px 8px; }
+
+/* 提示条 */
+.callout {
+  border-radius: 8px;
+  padding: 12px 16px;
+  font-size: 13px;
+  margin-bottom: 20px;
+  border: 1px solid transparent;
+}
+.callout.info { background: var(--brand-soft); border-color: #c8dbfc; color: #1e3a8a; }
+.callout.warn { background: var(--amber-soft); border-color: #f3ddae; color: #92400e; }
+
+/* 流程条（端到端流水线） */
+.pipeline { display: flex; align-items: stretch; gap: 0; flex-wrap: wrap; margin: 8px 0 4px; }
+.pipe-step {
+  flex: 1;
+  min-width: 130px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  padding: 14px 16px;
+  position: relative;
+}
+.pipe-step:first-child { border-radius: 10px 0 0 10px; }
+.pipe-step:last-child { border-radius: 0 10px 10px 0; }
+.pipe-step + .pipe-step { border-left: none; }
+.pipe-step .num {
+  width: 22px; height: 22px; border-radius: 50%;
+  background: var(--brand); color: #fff;
+  font-size: 12px; font-weight: 700;
+  display: inline-flex; align-items: center; justify-content: center;
+  margin-bottom: 6px;
+}
+.pipe-step .t { font-weight: 600; font-size: 14px; }
+.pipe-step .d { color: var(--ink-2); font-size: 12px; margin-top: 2px; }
+
+/* 状态机 */
+.stateflow { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.state-node {
+  padding: 8px 18px; border-radius: 999px;
+  font-size: 13px; font-weight: 600;
+  border: 2px solid var(--line); background: #fff; color: var(--ink-2);
+}
+.state-node.on { border-color: var(--brand); color: var(--brand-dark); background: var(--brand-soft); }
+.state-arrow { color: #9aa6b5; font-size: 18px; }
+
+/* 报告预览（Word 纸张效果） */
+.paper {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  box-shadow: 0 4px 16px rgba(16,24,40,.10);
+  padding: 40px 48px;
+  max-width: 760px;
+  margin: 0 auto;
+  font-size: 14px;
+}
+.paper h1 { font-size: 22px; text-align: center; margin-bottom: 4px; }
+.paper .paper-sub { text-align: center; color: var(--ink-2); font-size: 13px; margin-bottom: 24px; }
+.paper h4 { font-size: 15px; margin: 18px 0 6px; }
+.paper p { margin-bottom: 8px; text-indent: 2em; }
+.fact-val { font-family: var(--mono); font-weight: 700; color: var(--brand-dark); }
+.insight {
+  background: var(--violet-soft);
+  border-left: 3px solid var(--violet);
+  padding: 10px 14px;
+  border-radius: 0 6px 6px 0;
+  margin: 8px 0;
+  text-indent: 0 !important;
+}
+
+/* 双栏 */
+.cols { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+.cols-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+@media (max-width: 900px) { .cols, .cols-3 { grid-template-columns: 1fr; } }
+
+/* 绑定标签 */
+.tag {
+  display: inline-block; padding: 1px 8px; border-radius: 5px;
+  font-size: 12px; font-family: var(--mono);
+}
+.tag-fact { background: var(--brand-soft); color: var(--brand-dark); }
+.tag-insight { background: var(--violet-soft); color: var(--violet); }
+
+.footer-note { text-align: center; color: #98a3b3; font-size: 12px; margin-top: 40px; }

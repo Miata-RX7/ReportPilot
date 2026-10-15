@@ -1,0 +1,49 @@
+services:
+  db:
+    image: postgres:16
+    container_name: reportpilot-db
+    environment:
+      POSTGRES_USER: reportpilot
+      POSTGRES_PASSWORD: reportpilot
+      POSTGRES_DB: reportpilot
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U reportpilot -d reportpilot"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    build: .
+    container_name: reportpilot-backend
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    volumes:
+      - .:/code
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://reportpilot:reportpilot@db:5432/reportpilot
+      SECRET_KEY: dev-only-secret-change-me
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # 生产前端（nginx 静态托管 + /api 反代 backend）
+  # 开发时不用本服务：容器只跑 db + backend，前端在宿主机 npm run dev
+  # 启动：docker compose --profile prod up -d --build
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+    container_name: reportpilot-frontend
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
+    profiles: ["prod"]
+
+volumes:
+  pgdata:

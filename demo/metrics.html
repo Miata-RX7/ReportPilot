@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ReportPilot 演示 · 指标定义</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="topbar">
+  <div class="logo">Report<span>Pilot</span> <span class="badge b-gray" style="margin-left:6px">UI Demo</span></div>
+  <nav>
+    <a href="index.html">产品概览</a>
+    <a href="datasources.html">数据源管理</a>
+    <a href="metrics.html" class="active">指标定义</a>
+    <a href="templates.html">模板与绑定</a>
+    <a href="reports.html">报告生成与审核</a>
+  </nav>
+</div>
+
+<div class="wrap">
+  <div class="page-head" style="display:flex;justify-content:space-between;align-items:flex-end">
+    <div>
+      <div class="page-title">指标定义（计算变量）</div>
+      <div class="page-sub">配置「取数 + 聚合公式」，产出报告可引用的<strong>变量</strong>。变量不一定是数字——可以是标量、时序曲线或占比饼图，渲染时按类型生成数值或图表插入 Word。</div>
+    </div>
+    <span class="btn btn-primary">+ 新增变量</span>
+  </div>
+
+  <div class="callout info">
+    变量 = 取数配置 + 聚合公式 + <b>产出类型</b>。报告模板中的占位符绑定的是变量，而不是裸数字：
+    <span class="tag tag-fact">scalar 标量</span> 渲染为数值文本，
+    <span class="tag tag-fact">timeseries 时序曲线</span> 渲染为折线图，
+    <span class="tag tag-fact">pie 占比</span> 渲染为饼图。
+  </div>
+
+  <div class="card">
+    <h2>变量列表</h2>
+    <table>
+      <tr>
+        <th>变量名</th><th>产出类型</th><th>数据源</th><th>取数范围</th><th>聚合 / 对比</th><th>单位</th><th>周期</th><th style="width:140px">操作</th>
+      </tr>
+      <tr>
+        <td><b class="mono">cpu_usage_avg</b><br><span class="muted">核心服务器 CPU 平均使用率</span></td>
+        <td><span class="badge b-blue">scalar</span></td>
+        <td>生产 Zabbix</td>
+        <td class="muted">主机组「核心生产」<br>item key: <span class="mono">system.cpu.util</span></td>
+        <td><span class="badge b-blue">avg</span> <span class="badge b-amber">环比 mom</span></td>
+        <td>%</td>
+        <td>月度</td>
+        <td><span class="btn btn-sm">编辑</span> <span class="btn btn-sm btn-danger-ghost">删除</span></td>
+      </tr>
+      <tr>
+        <td><b class="mono">mem_usage_max</b><br><span class="muted">内存峰值使用率</span></td>
+        <td><span class="badge b-blue">scalar</span></td>
+        <td>生产 Zabbix</td>
+        <td class="muted">主机组「核心生产」<br>item key: <span class="mono">vm.memory.utilization</span></td>
+        <td><span class="badge b-blue">max</span> <span class="badge b-gray">无对比</span></td>
+        <td>%</td>
+        <td>月度</td>
+        <td><span class="btn btn-sm">编辑</span> <span class="btn btn-sm btn-danger-ghost">删除</span></td>
+      </tr>
+      <tr>
+        <td><b class="mono">disk_io_sum</b><br><span class="muted">数据库磁盘 IO 总量</span></td>
+        <td><span class="badge b-blue">scalar</span></td>
+        <td>生产 Zabbix</td>
+        <td class="muted">主机组「数据库」<br>已选 12 个 item</td>
+        <td><span class="badge b-blue">sum</span> <span class="badge b-amber">基线 lookback=1</span></td>
+        <td>GB</td>
+        <td>月度</td>
+        <td><span class="btn btn-sm">编辑</span> <span class="btn btn-sm btn-danger-ghost">删除</span></td>
+      </tr>
+      <tr>
+        <td><b class="mono">net_traffic_trend</b><br><span class="muted">出口带宽日趋势（入/出双向）</span></td>
+        <td><span class="badge b-green">timeseries</span></td>
+        <td>生产 Zabbix</td>
+        <td class="muted">主机组「网络设备」<br>已选 4 个 item（in/out）</td>
+        <td><span class="badge b-blue">avg / 日</span> <span class="badge b-amber">叠加基线</span></td>
+        <td>Mbps</td>
+        <td>月度</td>
+        <td><span class="btn btn-sm">编辑</span> <span class="btn btn-sm btn-danger-ghost">删除</span></td>
+      </tr>
+      <tr>
+        <td><b class="mono">storage_usage_pie</b><br><span class="muted">各业务存储容量占比</span></td>
+        <td><span class="badge b-violet">pie</span></td>
+        <td>生产 Zabbix</td>
+        <td class="muted">主机组「存储」<br>通配: <span class="mono">vfs.fs.size[*,pused]</span></td>
+        <td><span class="badge b-blue">按挂载点分组占比</span></td>
+        <td>%</td>
+        <td>月度</td>
+        <td><span class="btn btn-sm">编辑</span> <span class="btn btn-sm btn-danger-ghost">删除</span></td>
+      </tr>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>变量产出预览（2026-09 期，计算引擎产出）</h2>
+    <div class="cols-3">
+      <div>
+        <h3><span class="badge b-blue">scalar</span> cpu_usage_avg</h3>
+        <p style="font-size:26px;font-weight:700;margin:6px 0"><span class="fact-val">62.4 %</span>
+          <span class="badge b-amber" style="font-size:12px;vertical-align:middle">环比 +3.1%</span></p>
+        <p class="muted mono">facts: { value: 62.4, baseline: 60.5, delta_pct: +3.1 }</p>
+      </div>
+      <div>
+        <h3><span class="badge b-green">timeseries</span> net_traffic_trend</h3>
+        <svg viewBox="0 0 260 110" style="width:100%;background:#fbfcfe;border:1px solid var(--line);border-radius:6px;margin:6px 0">
+          <line x1="28" y1="10" x2="28" y2="90" stroke="#d6dce5"/>
+          <line x1="28" y1="90" x2="252" y2="90" stroke="#d6dce5"/>
+          <polyline points="28,60 60,52 92,66 124,40 156,48 188,30 220,44 252,26"
+            fill="none" stroke="#2563eb" stroke-width="2"/>
+          <polyline points="28,74 60,70 92,78 124,62 156,68 188,56 220,64 252,52"
+            fill="none" stroke="#16a34a" stroke-width="2" stroke-dasharray="4 3"/>
+          <text x="30" y="104" font-size="8" fill="#8a94a3">09-01</text>
+          <text x="226" y="104" font-size="8" fill="#8a94a3">09-30</text>
+          <text x="196" y="18" font-size="8" fill="#2563eb">— 出口</text>
+          <text x="196" y="28" font-size="8" fill="#16a34a">┄ 入口</text>
+        </svg>
+        <p class="muted mono">facts: { series: [{t, in, out}…], unit: "Mbps" }</p>
+      </div>
+      <div>
+        <h3><span class="badge b-violet">pie</span> storage_usage_pie</h3>
+        <svg viewBox="0 0 260 100" style="width:100%;background:#fbfcfe;border:1px solid var(--line);border-radius:6px;margin:6px 0">
+          <circle cx="60" cy="50" r="34" fill="none" stroke="#2563eb" stroke-width="18" stroke-dasharray="96.1 213.6" transform="rotate(-90 60 50)"/>
+          <circle cx="60" cy="50" r="34" fill="none" stroke="#16a34a" stroke-width="18" stroke-dasharray="66.7 213.6" stroke-dashoffset="-96.1" transform="rotate(-90 60 50)"/>
+          <circle cx="60" cy="50" r="34" fill="none" stroke="#d97706" stroke-width="18" stroke-dasharray="34.1 213.6" stroke-dashoffset="-162.8" transform="rotate(-90 60 50)"/>
+          <circle cx="60" cy="50" r="34" fill="none" stroke="#94a3b8" stroke-width="18" stroke-dasharray="16.7 213.6" stroke-dashoffset="-196.9" transform="rotate(-90 60 50)"/>
+          <text x="110" y="36" font-size="9" fill="#2563eb">■ 数据库 45%</text>
+          <text x="110" y="52" font-size="9" fill="#16a34a">■ 虚拟机 31%</text>
+          <text x="110" y="68" font-size="9" fill="#d97706">■ 备份 16%</text>
+          <text x="110" y="84" font-size="9" fill="#94a3b8">■ 其他 8%</text>
+        </svg>
+        <p class="muted mono">facts: { segments: [{label, pct}…] }</p>
+      </div>
+    </div>
+    <p class="muted" style="margin-top:10px">无论产出是数值还是图表，都属于 <b>facts</b>：只由计算引擎生成，AI 不可修改；渲染报告时图表变量生成图片嵌入 Word。</p>
+  </div>
+
+  <div class="cols">
+    <div class="card">
+      <h2>取数配置（query_config）</h2>
+      <p class="muted" style="margin-bottom:8px">通过 Adapter 实时拉取可选范围，避免手填出错：</p>
+      <table>
+        <tr><td style="width:140px" class="muted">① 选主机组</td><td><span class="mono">list_host_groups()</span> → 「核心生产」「数据库」「网络设备」…</td></tr>
+        <tr><td class="muted">② 选监控项</td><td><span class="mono">list_items(host_group_ids, value_types=[0,3])</span> → 只列数值型 item</td></tr>
+        <tr><td class="muted">③ 支持通配</td><td><span class="mono">item_key_pattern: "vfs.fs.size[*,pused]"</span> 批量匹配</td></tr>
+      </table>
+    </div>
+
+    <div class="card">
+      <h2>聚合公式（calc_formula）</h2>
+      <p class="muted" style="margin-bottom:8px">Adapter 透传小时级趋势的 min/avg/max 三列，计算引擎二次聚合：</p>
+      <div class="callout info" style="margin-bottom:8px">
+        <span class="mono">{ "agg": "avg", "compare": "mom", "baseline_lookback": 1 }</span>
+      </div>
+      <table>
+        <tr><td class="muted" style="width:130px">本期区间</td><td class="mono">2026-09-01 ～ 2026-09-30（UTC）</td></tr>
+        <tr><td class="muted">基线区间</td><td class="mono">2026-08-01 ～ 2026-08-31（日历月平移）</td></tr>
+        <tr><td class="muted">scalar 产出</td><td><span class="mono">value / baseline / delta_pct</span></td></tr>
+        <tr><td class="muted">timeseries 产出</td><td><span class="mono">series[{t, value…}]</span>（可叠加基线序列）→ 渲染折线图</td></tr>
+        <tr><td class="muted">pie 产出</td><td><span class="mono">segments[{label, pct}]</span> → 渲染饼图</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <div class="footer-note">ReportPilot UI Demo · 静态演示页，数据均为 mock</div>
+</div>
+</body>
+</html>

@@ -1,0 +1,88 @@
+/* 全局基础样式：所有取值均来自 tokens.scss */
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: var(--font-sans);
+  font-size: var(--font-base);
+  background-color: var(--color-bg);
+  color: var(--color-text-primary);
+}
+
+/* 所有页面统一的内容容器：内边距 + 总宽度上限 + 居中。
+   box-sizing: border-box 保证 --layout-content-max-width 表示"含内边距的总宽"，
+   否则 padding 会加在 max-width 之外，实际比 token 大 2 * space-6。 */
+.page-container {
+  box-sizing: border-box;
+  padding: var(--space-6);
+  max-width: var(--layout-content-max-width);
+  margin: 0 auto;
+}
+
+.text-muted {
+  color: var(--color-text-tertiary);
+}
+
+.mt-12 {
+  margin-top: var(--space-3);
+}
+
+.mb-12 {
+  margin-bottom: var(--space-3);
+}
+
+/* 软标签：浅底 + 深字（Design Token §1.2），全局统一状态表达 */
+.soft-tag {
+  display: inline-flex;
+  align-items: center;
+  height: var(--tag-height);
+  padding: 0 var(--tag-padding-x);
+  border-radius: var(--tag-radius);
+  font-size: var(--tag-font-size);
+  line-height: 1;
+}
+
+.soft-tag--success {
+  color: var(--color-success);
+  background-color: var(--color-success-bg);
+}
+
+.soft-tag--neutral {
+  color: var(--color-neutral);
+  background-color: var(--color-neutral-bg);
+}
+
+.soft-tag--info {
+  color: var(--color-info);
+  background-color: var(--color-info-bg);
+}
+
+.soft-tag--warning {
+  color: var(--color-warning);
+  background-color: var(--color-warning-bg);
+}
+
+.soft-tag--danger {
+  color: var(--color-danger);
+  background-color: var(--color-danger-bg);
+}
+
+.soft-tag--accent {
+  color: var(--color-accent-soft);
+  background-color: var(--color-accent-bg);
+}
+
+/* 代码片段（{{变量}}、token 提示、JSON 片段） */
+.code-chip {
+  padding: var(--code-padding);
+  border-radius: var(--code-radius);
+  font-family: var(--code-font);
+  font-size: var(--font-xs);
+  color: var(--code-text);
+  background-color: var(--code-bg);
+}

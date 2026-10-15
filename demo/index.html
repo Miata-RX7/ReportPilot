@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ReportPilot 演示 · 产品概览</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="topbar">
+  <div class="logo">Report<span>Pilot</span> <span class="badge b-gray" style="margin-left:6px">UI Demo</span></div>
+  <nav>
+    <a href="index.html" class="active">产品概览</a>
+    <a href="datasources.html">数据源管理</a>
+    <a href="metrics.html">指标定义</a>
+    <a href="templates.html">模板与绑定</a>
+    <a href="reports.html">报告生成与审核</a>
+  </nav>
+</div>
+
+<div class="wrap">
+  <div class="page-head">
+    <div class="page-title">ReportPilot — 自动化运维巡检报告平台</div>
+    <div class="page-sub">连接监控数据源，按周期自动产出「数据真实可信、结论由 AI 辅助」的 Word 巡检报告，内置人工审核工作流。</div>
+  </div>
+
+  <div class="callout info">
+    本目录为纯静态 UI 演示（mock 数据），用于呈现目标效果。后端骨架已基于 FastAPI + PostgreSQL 搭建并通过冒烟测试，已实测连通真实 Zabbix 7.2.0。
+  </div>
+
+  <div class="card">
+    <h2>端到端流水线</h2>
+    <div class="pipeline">
+      <div class="pipe-step">
+        <div class="num">1</div>
+        <div class="t">连接数据源</div>
+        <div class="d">Zabbix（Phase 2 扩展 AIOps），密钥 Fernet 加密存储</div>
+      </div>
+      <div class="pipe-step">
+        <div class="num">2</div>
+        <div class="t">定义指标</div>
+        <div class="d">取数配置 + 聚合公式（avg/max/sum、环比、基线对比）</div>
+      </div>
+      <div class="pipe-step">
+        <div class="num">3</div>
+        <div class="t">模板绑定</div>
+        <div class="d">上传 Word 模板，占位符绑定指标或 AI 洞察槽位</div>
+      </div>
+      <div class="pipe-step">
+        <div class="num">4</div>
+        <div class="t">生成报告</div>
+        <div class="d">按周期（月/周/日）计算引擎产出数值事实，AI 生成文字洞察</div>
+      </div>
+      <div class="pipe-step">
+        <div class="num">5</div>
+        <div class="t">审核推送</div>
+        <div class="d">提交 → 批准/驳回 → 邮件发送（SMTP）</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="cols-3">
+    <div class="card">
+      <h3>核心设计理念：facts / insights 分离</h3>
+      <p class="muted">
+        报告中的<span class="tag tag-fact">数值事实</span>仅由计算引擎写入，AI 不可修改；
+        AI 只负责填充<span class="tag tag-insight">洞察槽位</span>（如总结、风险提示）。
+        从机制上杜绝「AI 编造数据」。
+      </p>
+    </div>
+    <div class="card">
+      <h3>安全基调</h3>
+      <p class="muted">
+        数据源密钥「只入不出」：Fernet 加密入库，接口只返回脱敏提示
+        <span class="secret">****3a91</span>，日志与数据库均无明文。
+      </p>
+    </div>
+    <div class="card">
+      <h3>可扩展架构</h3>
+      <p class="muted">
+        新增数据源 = 新增 Adapter 实现 + 一条配置记录，流水线代码零改动。
+        审核工作流完整留痕（report_audits）。
+      </p>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>当前实施状态</h2>
+    <table>
+      <tr><th style="width:200px">模块</th><th>状态</th><th>说明</th></tr>
+      <tr><td>数据源管理 API</td><td><span class="badge b-green">已上线</span></td><td class="muted">增删改查 + 连通性测试，7 项冒烟全过；实测连通 Zabbix 7.2.0</td></tr>
+      <tr><td>指标定义 / 计算引擎</td><td><span class="badge b-amber">规划中</span></td><td class="muted">数据模型与周期工具（环比、基线平移）已就绪</td></tr>
+      <tr><td>Word 模板渲染</td><td><span class="badge b-amber">规划中</span></td><td class="muted">占位符解析与绑定模型已设计（python-docx）</td></tr>
+      <tr><td>AI 洞察</td><td><span class="badge b-amber">规划中</span></td><td class="muted">OpenAI 兼容接口配置已预留，Phase 1 单槽位</td></tr>
+      <tr><td>审核与推送</td><td><span class="badge b-amber">规划中</span></td><td class="muted">状态机与审计表已建模，SMTP 配置已预留</td></tr>
+    </table>
+  </div>
+
+  <div class="footer-note">ReportPilot UI Demo · 静态演示页，数据均为 mock</div>
+</div>
+</body>
+</html>
