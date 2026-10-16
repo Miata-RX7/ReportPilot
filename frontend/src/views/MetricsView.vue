@@ -41,7 +41,7 @@ import {
 import type { TimeQuickOffset } from '@/api/types'
 import { useAuthStore } from '@/stores/auth'
 import { parseApiError } from '@/utils/error'
-import { type AiopsPick } from '@/utils/aiopsRef'
+import { type AiopsPick, buildPicksFromRefs } from '@/utils/aiopsRef'
 import {
   changePctClass,
   factDisplayNumber,
@@ -473,6 +473,13 @@ async function openEdit(row: MetricDefinitionRead) {
   form.host_ids = [...(row.query_config.host_ids ?? [])]
   form.item_ids = [...(row.query_config.item_ids ?? [])]
 
+  // AIOps：范围是「模型 / 实例」，取数对象是**定位串**（n:/l: 前缀）。
+  // 必须一起回填，否则 AiopsScopePicker 挂载时会读到空的 scope/picks，
+  // 而它的 immediate watcher 又会把这些值清掉 —— 编辑一个AIOps 指标会丢配置。
+  form.model_ids = [...(row.query_config.model_ids ?? [])]
+  form.instance_ids = [...(row.query_config.instance_ids ?? [])]
+  aiopsPicks.value = buildPicksFromRefs(row.query_config.item_ids ?? [])
+
   // 时间类型不取数：回填时间配置即可，不需要拉取主机组/主机/监控项
   if (form.metric_type === 'time') {
     fillTimeConfig(row.type_config as Record<string, unknown> | undefined)
@@ -480,6 +487,12 @@ async function openEdit(row: MetricDefinitionRead) {
   }
 
   const id = row.data_source_id
+  if (isAiopsDs.value) {
+    // AIOps 的模型 / 实例 / 监控项由 AiopsScopePicker 自己按需加载，
+    // 这里不要抢跑（抢跑会把它的内部状态与本表单的 scope 搅在一起）
+    mergeResolved(resolved)
+    return
+  }
   await loadGroups(id)
   if (form.host_group_ids.length) await loadHosts(id, form.host_group_ids)
   if (form.host_ids.length) await loadItems(id, form.host_ids)

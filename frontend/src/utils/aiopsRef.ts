@@ -286,6 +286,37 @@ export function buildPicks(
   return out
 }
 
+/**
+ * 从已落库的定位串还原成带标签的 picks（编辑回显用）。
+ *
+ * 只需要定位串本身就能还原坐标；`label` 优先用传入的名称映射，
+ * 没有映射时退化为可读的「监控项 / 行」—— 级联加载出列元数据后
+ * 会再刷新一次标签，用户基本看不到这个中间态。
+ */
+export function buildPicksFromRefs(
+  refs: string[],
+  nameOf?: (itemId: string, columnId: string | null) => { itemName?: string; column?: AiopsColumn | null },
+): AiopsPick[] {
+  const out: AiopsPick[] = []
+  for (const raw of refs) {
+    const ref = decodeRef(raw)
+    if (!ref) continue
+    const itemId = String(ref.itemId)
+    const meta = nameOf?.(itemId, ref.columnId === null ? null : String(ref.columnId))
+    const itemName = meta?.itemName ?? `item-${itemId}`
+    const column = meta?.column ?? null
+    out.push({
+      ref: raw,
+      label: refLabel(ref, itemName, column),
+      itemId,
+      itemName,
+      column,
+      rowKey: ref.rowKey,
+    })
+  }
+  return out
+}
+
 /** 把已落库的定位串还原成级联回显所需的分组结构。 */
 export function picksToSelections(
   refs: string[],

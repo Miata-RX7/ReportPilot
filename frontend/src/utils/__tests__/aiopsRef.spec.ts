@@ -10,6 +10,7 @@ import { describe, expect, it } from 'vitest'
 import {
   type AiopsColumn,
   allowedMetricTypes,
+  buildPicksFromRefs,
   columnLabel,
   decodeRef,
   encodeRef,
@@ -19,6 +20,43 @@ import {
   refLabel,
   supportsCurve,
 } from '@/utils/aiopsRef'
+
+describe('buildPicksFromRefs（编辑回显）', () => {
+  it('从定位串还原坐标与标签', () => {
+    const refs = [encodeRef(14009, 10143)!, encodeRef(14009, 9669, 11504, 'Port1')!]
+    const picks = buildPicksFromRefs(refs)
+    expect(picks).toHaveLength(2)
+    expect(picks[0]).toMatchObject({ ref: refs[0], itemId: '10143', column: null, rowKey: null })
+    expect(picks[0].label).toBe('item-10143')
+    expect(picks[1]).toMatchObject({ itemId: '9669', rowKey: 'Port1' })
+  })
+
+  it('传入名称映射后标签可读', () => {
+    const ref = encodeRef(14009, 9669, 11504, 'Port1')!
+    const picks = buildPicksFromRefs([ref], () => ({
+      itemName: '端口表',
+      column: {
+        column_id: 11504,
+        name: '入流量',
+        unit: 'bps',
+        value_type: 'number',
+        has_history: true,
+        is_primary: false,
+      },
+    }))
+    expect(picks[0].label).toBe('端口表 / 入流量 (bps) / Port1')
+    expect(picks[0].column?.name).toBe('入流量')
+  })
+
+  it('非法定位串被跳过而不是抛错', () => {
+    expect(buildPicksFromRefs(['n:1:2', 'garbage', '42253'])).toHaveLength(1)
+  })
+
+  it('原样保留 ref（落库值不能被改写）', () => {
+    const ref = encodeRef(14009, 9669, 11504, 'Port1')!
+    expect(buildPicksFromRefs([ref])[0].ref).toBe(ref)
+  })
+})
 
 describe('encodeRef / decodeRef', () => {
   it('number / text 监控项往返', () => {

@@ -237,6 +237,12 @@ watch(
       modelOptions.value = []
     }
   },
+  // immediate 是必需的：本组件由父组件的 v-if="isAiopsDs" 挂载，挂载那一刻
+  // datasourceId **往往已经是选中的值**（弹窗打开时就带着上次选的数据源，
+  // 或用户先选数据源才切到 AIOps 分支）。没有 immediate，watcher 只注册不触发，
+  // loadModels() 永远不执行 -> 模型下拉空白 / "No data"。
+  // 见 AGENTS.md §3.12 同类问题。
+  { immediate: true },
 )
 
 // 外部（编辑回显）灌入已保存的 picks -> 还原勾选状态
@@ -259,7 +265,9 @@ watch(
     }
     publish()
   },
-  { deep: true },
+  // 同上：编辑弹窗挂载时 picks 已经是从后端灌进来的，不会再"变化"，
+  // 没有 immediate 就永远不触发回显逻辑。
+  { deep: true, immediate: true },
 )
 
 defineExpose({ allowedFor: allowedMetricTypes })
