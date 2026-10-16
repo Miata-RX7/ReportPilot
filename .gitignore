@@ -23,6 +23,12 @@ backend/_accept/
 .playwright-cli/
 *.log
 
+# 临时文件目录：接口探测的原始响应、抓取脚本等，统一放这里，不入库
+tmp/
+
 # 归档区：已废弃文件移入 _attic/，只保留清单 README 入库，内容不再分发
 _attic/*
 !_attic/README.md
+
+# 临时工作目录（接口探测脚本、抓到的原始响应等），一律不入库
+tmp/

@@ -8,7 +8,7 @@ import logging
 
 from pydantic import BaseModel, Field
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -24,6 +24,7 @@ from app.schemas.datasource import (
     HostGroupRef,
     HostRef,
     ItemRef,
+    ItemRowRef,
 )
 from app.services.adapters import build_adapter
 from app.services.adapters.base import (
@@ -165,7 +166,13 @@ def _parse_id_list(raw: str | None, param: str) -> list[str]:
 
 def _to_group_refs(rows: list[dict]) -> list[HostGroupRef]:
     return [
-        HostGroupRef(group_id=str(r["group_id"]), name=r["name"]) for r in rows
+        HostGroupRef(
+            group_id=str(r["group_id"]),
+            name=r["name"],
+            instance_num=r.get("instance_num"),
+            template_num=r.get("template_num"),
+        )
+        for r in rows
     ]
 
 
@@ -181,6 +188,11 @@ def _to_host_refs(rows: list[dict]) -> list[HostRef]:
 
 
 def _to_item_refs(rows: list[dict]) -> list[ItemRef]:
+    """把 adapter 的监控项映射成ItemRef。
+
+    AIOps 独有的键（``aiops_*``）只在存在时透传，配合端点的
+    ``response_model_exclude_none=True``，**Zabbix 的响应体逐字不变**。
+    """
     return [
         ItemRef(
             item_id=str(r["item_id"]),
@@ -190,12 +202,17 @@ def _to_item_refs(rows: list[dict]) -> list[ItemRef]:
             host=r.get("host", ""),
             value_type=int(r["value_type"]),
             units=r.get("units", ""),
+            aiops_data_type=r.get("aiops_data_type"),
+            aiops_columns=r.get("aiops_columns") or None,
+            aiops_template_id=r.get("aiops_template_id"),
+            aiops_template_name=r.get("aiops_template_name") or None,
+            aiops_cycle=r.get("aiops_cycle"),
         )
         for r in rows
     ]
 
 
-@router.get("/{ds_id}/host-groups", response_model=list[HostGroupRef])
+@router.get("/{ds_id}/host-groups", response_model=list[HostGroupRef], response_model_exclude_none=True)
 async def list_ds_host_groups(
     ds_id: int,
     db: AsyncSession = Depends(get_db),
@@ -210,7 +227,7 @@ async def list_ds_host_groups(
         raise _adapter_http_error(exc) from None
 
 
-@router.get("/{ds_id}/hosts", response_model=list[HostRef])
+@router.get("/{ds_id}/hosts", response_model=list[HostRef], response_model_exclude_none=True)
 async def list_ds_hosts(
     ds_id: int,
     group_ids: str | None = None,
@@ -228,7 +245,7 @@ async def list_ds_hosts(
     return _to_host_refs(rows[:MAX_HOSTS_LIMIT])
 
 
-@router.get("/{ds_id}/items", response_model=list[ItemRef])
+@router.get("/{ds_id}/items", response_model=list[ItemRef], response_model_exclude_none=True)
 async def list_ds_items(
     ds_id: int,
     host_ids: str | None = None,
@@ -316,7 +333,14 @@ async def analyze_pie_suitability(
     """判断某监控项是否适合做 UP/DOWN 占比（pie 指标配置前的引导）。
 
     7 天窗口 + 5 秒超时；超时返回 suitable="unknown"，不硬失败。
+    AIOps 没有Zabbix 那种 up/down 值域语义，直接 422 拒绝。
     """
+    ds = await _get_or_404(db, ds_id)
+    if ds.type != "zabbix":
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "pie 类型仅支持 Zabbix 数据源（AIOps 无 up/down 值域语义）",
+        )
     adapter, _ = await load_adapter_and_name(db, ds_id)
     try:
         item_id = int(payload.item_id)
@@ -326,3 +350,50 @@ async def analyze_pie_suitability(
             f"item_id 必须是数字: {payload.item_id!r}",
         ) from None
     return await pie_suitability.analyze_pie_suitability(adapter, item_id)
+
+
+@router.get(
+    "/{ds_id}/item-rows",
+    response_model=list[ItemRowRef],
+    response_model_exclude_none=True,
+)
+async def list_ds_item_rows(
+    ds_id: int,
+    instance_id: str = Query(..., description="AIOps 实例 id"),
+    item_id: str = Query(..., description="AIOps list 型监控项 id"),
+    column_id: str = Query(..., description="列 id（用于过滤无数据的行）"),
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> list[ItemRowRef]:
+    """列出 list 型监控项的主键行（AIOps 级联第 4 级）。
+
+    只返回**该列当前值非空**的行：实测「当前值非空」⟺「有历史」，
+    过滤掉空行可以避免用户选到「选了没数据」的项。
+    """
+    ds = await _get_or_404(db, ds_id)
+    if ds.type != "aiops":
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "该端点仅适用于 AIOps 数据源",
+        )
+    adapter, _ = await load_adapter_and_name(db, ds_id)
+    try:
+        rows = await adapter.list_item_rows(
+            instance_id=instance_id,
+            item_id=item_id,
+            column_id=column_id,
+        )
+    except AdapterError as exc:
+        raise _adapter_http_error(exc) from None
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, f"参数非法: {exc}"
+        ) from None
+    return [
+        ItemRowRef(
+            row_key=str(r["row_key"]),
+            current_value=str(r.get("current_value") or ""),
+            as_of=int(r.get("as_of") or 0),
+        )
+        for r in rows
+    ]

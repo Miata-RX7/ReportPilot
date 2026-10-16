@@ -122,7 +122,9 @@ class FakeAdapter(DataSourceAdapter):
     ) -> list[dict[str, Any]]:
         return self._items
 
-    async def fetch_latest_value(self, item_id: int):  # type: ignore[no-untyped-def]
+    async def fetch_latest_value(  # type: ignore[no-untyped-def]
+        self, item_id: int, time_from: int | None = None, time_till: int | None = None
+    ):
         return None
 
 
@@ -361,7 +363,7 @@ class TestResolveItems:
                 "item_ids": ["abc"],
             }
         )
-        with pytest.raises(MetricComputeError, match="非数字"):
+        with pytest.raises(MetricComputeError, match="非数字|不是合法 id"):
             await compute_metric(metric, PERIOD, adapter, "ds")
 
     async def test_invalid_agg_raises(self) -> None:

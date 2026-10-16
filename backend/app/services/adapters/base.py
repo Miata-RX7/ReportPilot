@@ -45,6 +45,11 @@ class DataSourceAdapter(ABC):
     仅存活于内存；实现类禁止将其写入日志、异常消息或返回值。
     """
 
+    #: 取数范围的语义标签。``host`` = 上级是「主机组」、下级是「主机」（Zabbix）；
+    #: ``model_instance`` = 上级是「模型」、下级是「实例」（AIOps）。
+    #: calc_engine 据此选择读query_config 的哪一组字段。
+    scope_kind: str = "host"
+
     def __init__(self, config: dict[str, Any], secret: str | None = None) -> None:
         self.config = config
         self._secret = secret
@@ -73,20 +78,22 @@ class DataSourceAdapter(ABC):
         """按主机列出监控项（host_ids 必传）。value_types 为空时由实现类给默认过滤。"""
 
     @abstractmethod
-    async def fetch_latest_value(self, item_id: int) -> dict[str, Any] | None:
-        """取单个监控项的**最新一个原始采样值**（history.get limit=1）。
-
-        供 text 类型 mode=latest 使用：需要原始值而非小时聚合，不能复用
-        fetch_trend_data。无数据时返回 None。
-        """
-
-    @abstractmethod
-    async def fetch_latest_value(self, item_id: int) -> dict[str, Any] | None:
-        """取单个监控项的**最新一条原始采样值**（history.get limit=1）。
+    async def fetch_latest_value(
+        self,
+        item_id: int,
+        time_from: int | None = None,
+        time_till: int | None = None,
+    ) -> dict[str, Any] | None:
+        """取单个监控项的**最新一条原始采样值**（Zabbix: history.get limit=1）。
 
         与 fetch_trend_data 的区别：返回原始值（不做小时聚合），且不做任何聚合。
         text 类型的 mode=latest 与 pie 适合性判定共用本方法。
         返回 None 表示该 item 无历史数据。
+
+        ``time_from`` / ``time_till`` 是可选区间（Unix 秒）。Zabbix 侧忽略
+        （取服务端保留的最后一条，行为与升级前完全一致）；AIOps 侧用来实现
+        「取周期末点」而不是「取调用时刻的当前值」—— 实测 AIOps 的 text 列
+        同样有历史，所以月报的 text 指标应取周期内最后一个点，重跑结果才稳定。
         """
 
     @abstractmethod
@@ -109,3 +116,88 @@ class DataSourceAdapter(ABC):
         趋势数据通常按小时聚合。实现类应透传每小时的 min/avg/max 三列，
         由 calc_engine 按 calc_formula.agg 做二次聚合（本期/基线同口径）。
         """
+
+    async def normalize_item_keys(self, keys: list[str]) -> dict[str, int]:
+        """把 query_config 里存的**稳定定位串**映射为进程内合成整数 id。
+
+        为什么需要这一层：calc_engine 内部对 item_id 做``int()`` 转换并用
+        ``dict[int, ...]`` 分组（见 resolve_series_items / _compute_curve），
+        所以 item_id 必须是整数。而 AIOps 的一个「可取数对象」是四元组
+        ``(实例, 监控项, 列, 主键行)``，其中主键行是字符串（如
+        ``GigabitEthernet1/0/1``），无法编码进整数。
+
+        实现约定：query_config 里存稳定可读的定位串，计算开始时经本方法换成
+        合成整数，后续 fetch_trend_data 再反查回定位串。默认实现（Zabbix）
+        直接把数字串转 int，**存量配置零改动**。
+
+        必须是「稳定」的：同一份 query_config 在不同进程/不同时间解析必须得到
+        同样的定位串，否则反查会落空。
+        """
+        out: dict[str, int] = {}
+        for key in keys:
+            try:
+                out[key] = int(key)
+            except (TypeError, ValueError):
+                raise AdapterAPIError(
+                    None, f"取数对象标识 {str(key)[:48]!r} 不是合法 id"
+                ) from None
+        return out
+
+    async def list_item_rows(
+        self,
+        *,
+        instance_id: str,
+        item_id: str,
+        column_id: str,
+    ) -> list[dict[str, Any]]:
+        """列出 list 型监控项的主键行（仅 AIOps 支持）。
+
+        返回 ``[{"row_key": str}]``，按主键列顺序返回。默认实现直接报错，
+        Zabbix 没有 list 型监控项，走不到这里。
+        """
+        raise AdapterAPIError(None, "该数据源不支持 list 型监控项的主键行")
+
+    async def resolve_scoped_items(
+        self,
+        *,
+        upper_ids: list[str],
+        lower_ids: list[str],
+        keys: list[str],
+    ) -> list[dict[str, Any]]:
+        """把 query_config 的定位串解析成带**合成整数 id** 的监控项元信息。
+
+        这一步把三件事收在一起，所以数据源之间的差异不会渗进 calc_engine：
+        1. 下级必须属于所选上级（防绕过前端直接构造 query_config）
+        2. 定位串必须能解析，且其指向的监控项确实存在于这些下级上
+        3. 返回的每个 dict 带 ``item_id``（**整数**，已过 normalize_item_keys），
+           以及 name / host_id / host 供object、formula 生成人类可读证据
+
+        默认实现是 Zabbix 语义（定位串即数字 item_id），存量配置零改动。
+        失败抛 ``AdapterAPIError``；调用方会转成 ``MetricComputeError`` 以保持
+        422 语义（AdapterError 默认会被映射成 502「数据源侧问题」）。
+        """
+        hosts = await self.list_hosts(upper_ids)
+        valid = {str(h["host_id"]) for h in hosts}
+        unknown = sorted({str(x) for x in lower_ids} - valid)
+        if unknown:
+            raise AdapterAPIError(
+                None, f"以下主机不属于所选主机组 {upper_ids}: {unknown}"
+            )
+        candidates = await self.list_items([str(x) for x in lower_ids])
+        mapping = await self.normalize_item_keys(keys)
+        found = {str(c["item_id"]) for c in candidates}
+        missing = sorted(k for k in keys if k not in found)
+        if missing:
+            raise AdapterAPIError(None, f"以下监控项未在指定主机中找到: {missing}")
+        by_id = {str(c["item_id"]): c for c in candidates}
+        return [
+            {
+                "item_id": mapping[key],
+                "name": str(by_id[key].get("name") or ""),
+                "key": str(by_id[key].get("key") or ""),
+                "host_id": str(by_id[key].get("host_id") or ""),
+                "host": str(by_id[key].get("host") or ""),
+                "units": str(by_id[key].get("units") or ""),
+            }
+            for key in keys
+        ]

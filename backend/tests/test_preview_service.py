@@ -75,7 +75,9 @@ class FakeAdapter(DataSourceAdapter):
             }
         ]
 
-    async def fetch_latest_value(self, item_id: int):  # type: ignore[no-untyped-def]
+    async def fetch_latest_value(  # type: ignore[no-untyped-def]
+        self, item_id: int, time_from: int | None = None, time_till: int | None = None
+    ):
         return None
 
 
