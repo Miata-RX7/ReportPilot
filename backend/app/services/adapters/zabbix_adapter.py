@@ -177,7 +177,12 @@ class ZabbixAdapter(DataSourceAdapter):
                 "host_id": int(h["hostid"]),
                 "name": h["name"],
                 "groups": [
-                    {"group_id": int(g["groupid"]), "name": g["name"]}
+                    # .get 兜底：hostgroups 的元素缺 name 时不该让整页 500
+                    # （实测踩过 —— 少一个展示字段直接变成「服务端错误」）
+                    {
+                        "group_id": int(g["groupid"]),
+                        "name": str(g.get("name") or ""),
+                    }
                     for g in (h.get("hostgroups") or [])
                 ],
             }

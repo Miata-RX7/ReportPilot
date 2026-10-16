@@ -181,10 +181,12 @@ def _parse_id_list(raw: str | None, param: str) -> list[str]:
 
 
 def _to_group_refs(rows: list[dict]) -> list[HostGroupRef]:
+    # name 用 .get 兜底：数据源侧的字典不该让整个列表 500（缺名最多显示成空标签，
+    # 远比「实例下拉整个打不开」好）
     return [
         HostGroupRef(
             group_id=str(r["group_id"]),
-            name=r["name"],
+            name=str(r.get("name") or ""),
             instance_num=r.get("instance_num"),
             template_num=r.get("template_num"),
         )
@@ -193,10 +195,12 @@ def _to_group_refs(rows: list[dict]) -> list[HostGroupRef]:
 
 
 def _to_host_refs(rows: list[dict]) -> list[HostRef]:
+    # 同_to_group_refs：展示字段一律 .get兜底，不让数据源少给一个键就500
     return [
         HostRef(
             host_id=str(r["host_id"]),
-            name=r["name"],
+            name=str(r.get("name") or r["host_id"]),
+            ip=r.get("ip") or None,
             groups=_to_group_refs(r.get("groups") or []),
         )
         for r in rows
