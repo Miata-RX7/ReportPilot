@@ -25,7 +25,8 @@
 | 路径 | 内容 |
 |---|---|
 | `backend/app/api/` | 一资源一文件路由；`deps.py` 提供 `get_current_user` / `require_admin` |
-| `backend/app/services/` | `calc_engine` 取数汇算、`ai_insight` 摘要、`mailer` 邮件、`scheduler` 调度、`crypto` Fernet、`runtime_config` 配置覆盖层、`series_stats` 曲线统计、`unit_scale` 单位换算、`ai_trace` AI 留痕、`ai_prompt_service` 提示词版本 |
+| `backend/app/services/` | `calc_engine` 取数汇算、`ai_insight` 摘要、`mailer` 邮件、`scheduler` 调度、`crypto` Fernet、`runtime_config` 配置覆盖层、`series_stats` 曲线统计、`unit_scale` 单位换算、`ai_trace` AI 留痕、`ai_prompt_service` 提示词版本、`aiops_keys` **AIOps 定位串编解码** |
+| `backend/app/services/adapters/` | `base` ABC（含 `scope_kind` / `normalize_item_keys` / `resolve_scoped_items`）、`zabbix_adapter`、`aiops_adapter`（**REST + header token，非 JSON-RPC**），`__init__` 注册表即扩展点 |
 | `backend/app/config.py` | Pydantic Settings，`.env` 是**默认值**来源 |
 | `backend/alembic/versions/` | 迁移，命名 `YYYYMMDD_NNNN_描述.py` |
 | `backend/tests/` | pytest，**基线 711 passed**（在目标服务器裸容器里跑；本机只能单文件跑） |
@@ -95,6 +96,27 @@
     **新写子弹窗照抄这个写法**；仓库里其它弹窗（`TemplateVersionsDialog` / `TemplateGrantsDialog` /
     `TemplatePreviewDialog` / `OnlyofficeEditorDialog` / `ReportDetailDialog`）都已有 `immediate: true`。
     另：vitest 是 `environment: 'node'` 且没装 `@vue/test-utils`，**组件层没有单测**，这类时序 bug 只能靠真实点击验收。
+14. **AIOps 接口的 8 条实测约束**（2026-10-16 逐条验证，已固化进 `aiops_keys.py` / `aiops_adapter.py` 注释与单测）：
+    - `limit` **无上限**（模型 115 / 实例 353 一次拉全）→ 不要写分页
+    - `search_unit_list` **不能预先 URL 编码**（`%5B%5D` → code=2）；原始 `[]` 或**省略**都正常
+    - `item_id_list` 必须是**带方括号的字面量字符串** `"[9669]"`，裸数字报
+      `[]int64: decode slice: expect [ or n`；`"[9669,9671]"` 多值可用
+    - `status` 的 `data` 字段是**二次编码的 JSON 字符串**（要 loads 两次）
+    - list 型取某行某列曲线**必须**同时带 `data_source_more` + `tags`，否则返回的是
+      **跨行聚合值** —— **不报错但数值是错的**（最容易静默出错的一处）
+    - 曲线点间隔 57~63 秒抖动、**不按整点对齐** → 分桶必须 `unix // 3600 * 3600`
+    - 接口返回的 avg/max/min 是**整窗统计**，不是分桶的 → per-hour 的必须自己算；
+      月窗口单次可拉 30 天（42626 点 / 1.26MB / 2.6 秒），所以分桶在 adapter 侧做
+    - **`source_history=1` 只是列级能力标志，不保证每行有数据**；但「该列当前值非空」⟺「有历史」
+      （26 行逐行验证零误判零漏判）→ 行列表按当前值过滤即可
+    - 无历史列是 `number` 时**只能配 scalar 不能配 curve**（用户确认）；AIOps **不支持 pie**
+15. **AIOps 的「取数对象」不是 id 而是四元组**：`(实例, 监控项, 列, 主键行)`，主键行是任意字符串
+    （`GigabitEthernet1/0/1`、`CNOOC-(HK-Internet_Center)`），与数字用 `:` 拼接必然歧义；
+    而 `calc_engine` 又强制 `int(item_id)`。因此 `query_config` 存**稳定定位串**
+    （`n:<实例>:<监控项>` / `l:<实例>:<监控项>:<列>:<b64url(主键行)>`，前缀字母开头以与
+    Zabbix 的纯数字天然区分），计算时经 `adapter.normalize_item_keys` 换成进程内合成整数。
+    **前端 `utils/aiopsRef.ts` 与后端 `services/aiops_keys.py` 是同一份协议的两处实现，
+    改任何一侧都必须同时改另一侧并跑各自的单测**（已用 6 个刁钻主键行对拍 base64url 逐字一致）。
 13. **AI 辅助开发会在源码目录留下 `_*.py` 残留，且大多是 0 字节空文件**（2026-10-15 清理）：
     `backend/` 与 `frontend/` 根层共 79 个 `_*.py`（`_fix_*` / `_p3a_*` / `_add_tests*` / `_probe_*` / `_q1` / `_r1`…），
     其中 **78 个是 0 字节**（落盘失败的残骸），只有 `backend/_e2e_time.py` 有真实内容（`time` 指标端到端手工脚本，
@@ -383,7 +405,18 @@ docker run --rm -v /opt/reportpilot/backend:/code -w /code reportpilot/backend:l
 3. 内层弹窗按钮按 `data-testid` 点（`insight-cfg-open` → `insight-cfg-save` → 外层 `bind-save`），按文案匹配容易点错层级
 4. `PeriodPicker` 粒度是 radio（`input.value === 'month'`），期间在 `.el-input__inner`；`el-date-picker` 不透传 `data-testid`
 5. token 存 `localStorage.rp_token`
-6. **`write_to_file` 对超过约 8KB 的内容会报「missing required argument filePath」（误报）**；大文件改用 PowerShell here-string 分块写
+6. **`write_to_file` 会间歇性报「missing required argument filePath」（工具缺陷，误报）**：
+   实测（2026-10-16）**与内容大小、字符集、路径都无关** —— 6 字节的纯 ASCII 内容、
+   以及几分钟前刚成功过的同一个路径，都会失败；而同一时刻 `replace_in_file` 正常。
+   **别再按「8KB 上限」去拆内容**（旧版本文档写错过，是错的），拆小完全无效。
+   **统一改用「占位符 + replace_in_file」**：
+   ```powershell
+   # 1) 建占位文件（内容必须是纯 ASCII，避免 PowerShell 传中文时被二次解析）
+   [System.IO.File]::WriteAllText("<绝对路径>", "// PLACEHOLDER", [System.Text.UTF8Encoding]::new($false))
+   # 2) 再用 replace_in_file 把 // PLACEHOLDER 替换成真实内容（可多次追加，规避单次体积）
+   ```
+   经验：`replace_in_file` / `read_file` / `execute_command` 至今零失败，只有 `write_to_file` 会抽。
+   附带：`write_to_file` 内容里出现 ASCII 双引号 `"` 时也可能触发同一误报，中文引号「」更稳。
 7. **`exec_command` 单条命令上限 8000 字节**；多行远程脚本要放 `.ps1` 并去掉 CR（否则 bash 报 `$'...do\r'`）
 8. **不要用 `List[string].AddRange()` 拼接文件行**：`ReadAllLines` 返回 `Object[]`，AddRange 抛类型转换异常，
    失败后 `WriteAllLines` 会把文件写成残缺 —— **本轮就是这样把 AGENTS.md 截断的**。追加内容只用 `AppendAllText`
