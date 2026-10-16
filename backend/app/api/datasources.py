@@ -98,8 +98,24 @@ async def create_datasource(
 async def list_datasources(
     db: AsyncSession = Depends(get_db),
     _: User = Depends(get_current_user),
+    include_inactive: bool = Query(
+        False, description="包含已软删除的数据源（仅排查用）"
+    ),
 ) -> list[DataSource]:
-    result = await db.scalars(select(DataSource).order_by(DataSource.id))
+    """列出数据源，**默认只返回启用中的**。
+
+    删除是软删除（``is_active=False``），但列表必须把它藏起来，否则会出现
+    「点了删除、提示成功、刷新后那行还在」—— 用户完全无法把它删掉，
+    因为界面上也没有「恢复」入口。
+
+    这与重名校验口径一致：``_check_name_conflict`` 只在 ``is_active=True``
+    范围内查重，即软删除的行被当作「已不存在」，同名可以直接重建。
+    真要查历史再用 ``include_inactive=true``。
+    """
+    stmt = select(DataSource).order_by(DataSource.id)
+    if not include_inactive:
+        stmt = stmt.where(DataSource.is_active.is_(True))
+    result = await db.scalars(stmt)
     return list(result.all())
 
 

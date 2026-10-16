@@ -178,6 +178,27 @@ class TestDelete:
             assert ds is not None
             assert ds.is_active is False
 
+    async def test_deleted_disappears_from_list(
+        self, api: tuple[AsyncClient, async_sessionmaker[AsyncSession]]
+    ) -> None:
+        """软删除后必须从列表消失（回归：曾出现「提示删除成功、刷新后那行还在」）。
+
+        界面上没有「恢复」入口，所以留着这行等于让用户删不掉它。
+        """
+        client, _ = api
+        body = await _create(client)
+        assert (await client.get("/api/datasources")).json()  # 先能看见
+        assert (await client.delete(f"/api/datasources/{body['id']}")).status_code == 204
+
+        listed = (await client.get("/api/datasources")).json()
+        assert all(d["id"] != body["id"] for d in listed)
+
+        # 但记录仍在库里（软删除，可审计）
+        assert (await client.get(f"/api/datasources/{body['id']}")).status_code == 200
+        # 需要排查时能显式要回来
+        with_inactive = (await client.get("/api/datasources?include_inactive=true")).json()
+        assert any(d["id"] == body["id"] for d in with_inactive)
+
 
 class TestConnectionEndpoint:
     @respx.mock
