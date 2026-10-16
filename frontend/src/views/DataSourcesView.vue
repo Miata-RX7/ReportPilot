@@ -265,16 +265,24 @@ onMounted(load)
         </el-form-item>
 
         <el-form-item label="类型" prop="type">
-          <el-select v-model="form.type" class="full-width">
+          <el-select
+            v-model="form.type"
+            class="full-width"
+            :disabled="editingId !== null"
+            data-testid="ds-type"
+          >
             <el-option label="Zabbix" value="zabbix" />
             <el-option label="AIOps" value="aiops" />
           </el-select>
           <div class="form-hint">
-            {{
-              form.type === 'aiops'
-                ? '取数层级为「模型 → 实例 → 监控项 → 列 → 主键行」；不支持饼图'
-                : 'JSON-RPC over HTTP，凭据放在 Authorization 头'
-            }}
+            <template v-if="editingId !== null">
+              类型创建后不可改：已绑定指标的取数配置是按类型存的（Zabbix 是主机组/主机 + 数字
+              item_id，AIOps 是模型/实例 + 定位串），改类型会让它们全部失效。需要换类型请新建数据源。
+            </template>
+            <template v-else-if="form.type === 'aiops'">
+              取数层级为「模型 → 实例 → 监控项 → 列 → 主键行」；不支持饼图
+            </template>
+            <template v-else>JSON-RPC over HTTP，凭据放在 Authorization 头</template>
           </div>
         </el-form-item>
 

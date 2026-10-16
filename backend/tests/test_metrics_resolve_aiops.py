@@ -189,3 +189,50 @@ class TestResolveMany:
         m = _Metric(5, None, {})
         assert await _resolve_many(None, [m]) == {}  # type: ignore[arg-type]
         assert adapter.resolve_calls == []
+
+    @pytest.mark.asyncio
+    async def test_rpc_count_independent_of_metric_count(self, patched) -> None:
+        """**防性能回归**：同一批主机的 N 个指标只做一次 resolve_scoped_items。
+
+        修复前resolve_scoped_items 被放在「每个指标一次」的循环里，
+        N 个指标 = N×(list_hosts + list_items) 次 RPC，列表页从几十毫秒
+        退化到数秒（实测 4.4kB 响应要 2.76 秒）。
+        """
+        adapter = patched(_FakeAdapter(aiops=True))
+        metrics = [
+            _Metric(
+                100 + i,
+                9,
+                {
+                    "model_ids": ["22"],
+                    "instance_ids": ["14009"],
+                    "item_ids": [f"n:14009:{200 + i}"],
+                },
+            )
+            for i in range(25)
+        ]
+        out = await _resolve_many(None, metrics)  # type: ignore[arg-type]
+        assert len(out) == 25
+        # 25 个指标 -> 仍然只有一次调用
+        assert len(adapter.resolve_calls) == 1
+        # 且这一次就把 25 个取数对象都解析了
+        assert len(adapter.resolve_calls[0]["keys"]) == 25
+
+    @pytest.mark.asyncio
+    async def test_distinct_host_sets_are_resolved_separately(self, patched) -> None:
+        """下级集合不同才需要多次调用；相同就合并。"""
+        adapter = patched(_FakeAdapter(aiops=True))
+        metrics = [
+            _Metric(
+                200 + i,
+                9,
+                {
+                    "model_ids": ["22"],
+                    "instance_ids": [str(14009 + i)],
+                    "item_ids": [f"n:{14009 + i}:1"],
+                },
+            )
+            for i in range(3)
+        ]
+        await _resolve_many(None, metrics)  # type: ignore[arg-type]
+        assert len(adapter.resolve_calls) == 3
