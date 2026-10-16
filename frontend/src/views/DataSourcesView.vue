@@ -9,7 +9,12 @@ import FormDialog from '@/components/FormDialog.vue'
 import PageHeader from '@/components/PageHeader.vue'
 import TestResultAlert from '@/components/TestResultAlert.vue'
 import { dataSourceApi } from '@/api/datasources'
-import type { DataSourceCreate, DataSourceRead, DataSourceUpdate } from '@/api/types'
+import type {
+  DataSourceConfig,
+  DataSourceCreate,
+  DataSourceRead,
+  DataSourceUpdate,
+} from '@/api/types'
 import { useAuthStore } from '@/stores/auth'
 import { parseApiError } from '@/utils/error'
 import { formatDateTime } from '@/utils/format'
@@ -105,16 +110,20 @@ async function onSubmit() {
   submitting.value = true
   nameConflict.value = false
   try {
+    // config 按类型构造：auth_type 是 Zabbix 的 JSON-RPC 鉴权方式，
+    // AIOps 走的是 HTTP header `token`（实测不带 token 返回 code=9 auth failed），
+    // 所以不能一律塞 auth_type: 'bearer'。
+    const config: DataSourceConfig = {
+      url: form.url,
+      timeout: form.timeout,
+      verify_ssl: form.verify_ssl,
+    }
+    if (form.type === 'zabbix') config.auth_type = 'bearer'
     if (editingId.value === null) {
       const payload: DataSourceCreate = {
         name: form.name,
         type: form.type,
-        config: {
-          url: form.url,
-          auth_type: 'bearer',
-          timeout: form.timeout,
-          verify_ssl: form.verify_ssl,
-        },
+        config,
         secret: form.secret,
       }
       await dataSourceApi.create(payload)
@@ -122,12 +131,7 @@ async function onSubmit() {
     } else {
       const payload: DataSourceUpdate = {
         name: form.name,
-        config: {
-          url: form.url,
-          auth_type: 'bearer',
-          timeout: form.timeout,
-          verify_ssl: form.verify_ssl,
-        },
+        config,
       }
       // secret 留空 = 保留原密钥（与后端 PUT 语义一致）
       if (form.secret) payload.secret = form.secret
@@ -263,12 +267,26 @@ onMounted(load)
         <el-form-item label="类型" prop="type">
           <el-select v-model="form.type" class="full-width">
             <el-option label="Zabbix" value="zabbix" />
-            <el-option label="AIOps（Phase 2）" value="aiops" disabled />
+            <el-option label="AIOps" value="aiops" />
           </el-select>
+          <div class="form-hint">
+            {{
+              form.type === 'aiops'
+                ? '取数层级为「模型 → 实例 → 监控项 → 列 → 主键行」；不支持饼图'
+                : 'JSON-RPC over HTTP，凭据放在 Authorization 头'
+            }}
+          </div>
         </el-form-item>
 
         <el-form-item label="URL" prop="url">
-          <el-input v-model="form.url" placeholder="https://zabbix.example.com" />
+          <el-input
+            v-model="form.url"
+            :placeholder="
+              form.type === 'aiops'
+                ? 'https://aiops.example.com（填到站点根即可，/api 会自动补）'
+                : 'https://zabbix.example.com'
+            "
+          />
         </el-form-item>
 
         <el-form-item label="超时(秒)" prop="timeout">
@@ -279,13 +297,22 @@ onMounted(load)
           <el-switch v-model="form.verify_ssl" />
         </el-form-item>
 
-        <el-form-item label="API Token" prop="secret">
+        <el-form-item :label="form.type === 'aiops' ? 'API Token' : 'API Token'" prop="secret">
           <el-input
             v-model="form.secret"
             type="password"
             show-password
-            :placeholder="editingId === null ? 'Zabbix API token' : '留空则不修改'"
+            :placeholder="
+              editingId !== null
+                ? '留空则不修改'
+                : form.type === 'aiops'
+                  ? 'AIOps token（utk- 开头）'
+                  : 'Zabbix API token'
+            "
           />
+          <div class="form-hint">
+            密钥加密存储，保存后只回显末 4 位；AIOps token 以 <code>token</code> 请求头发送
+          </div>
         </el-form-item>
       </el-form>
     </FormDialog>

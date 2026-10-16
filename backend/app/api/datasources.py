@@ -231,15 +231,21 @@ async def list_ds_host_groups(
 async def list_ds_hosts(
     ds_id: int,
     group_ids: str | None = None,
+    q: str | None = None,
     db: AsyncSession = Depends(get_db),
     _: User = Depends(get_current_user),
 ) -> list[HostRef]:
-    """主机下拉（级联第二级）：group_ids 必传，最多返回 500 台。"""
+    """主机 / 实例下拉（级联第二级）：group_ids 必传，最多返回 500 条。
+
+    ``q`` 是可选的名称 / IP 子串过滤，**仅 AIOps 生效**（Zabbix adapter 忽略它，
+    与升级前行为一致）。注意过滤发生在截断之前 —— 先截 500 再过滤会让搜索
+    结果漏掉本该命中的项。
+    """
     await _get_or_404(db, ds_id)
     wanted = _parse_id_list(group_ids, "group_ids")
     adapter, _ = await load_adapter_and_name(db, ds_id)
     try:
-        rows = await adapter.list_hosts(wanted)
+        rows = await adapter.list_hosts(wanted, q=q or None)
     except AdapterError as exc:
         raise _adapter_http_error(exc) from None
     return _to_host_refs(rows[:MAX_HOSTS_LIMIT])
