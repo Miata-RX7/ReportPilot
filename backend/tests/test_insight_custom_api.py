@@ -115,7 +115,9 @@ class FakeAdapter(DataSourceAdapter):
             }
         ]
 
-    async def fetch_latest_value(self, item_id: int) -> Any:
+    async def fetch_latest_value(
+        self, item_id: int, time_from: int | None = None, time_till: int | None = None
+    ) -> Any:
         return None
 
     async def get_item_meta(self, item_id: int) -> Any:

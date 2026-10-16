@@ -87,6 +87,60 @@ def _parse_ids(raw: Any, field: str) -> list[int]:
         raise MetricComputeError(f"query_config.{field} 含非数字项: {values}") from None
 
 
+def _clean_keys(raw: Any, field: str) -> list[str]:
+    """取数对象的**定位串**列表（去空白、丢空项）。
+
+    Zabbix 的定位串就是数字 item_id 字符串；AIOps 的是四元组编码串
+    （见 services/aiops_keys.py）。这里只做清洗，不解释内容 ——
+    解释是 adapter 的事。
+    """
+    out: list[str] = []
+    for value in raw or []:
+        token = str(value).strip()
+        if token and token not in out:
+            out.append(token)
+    return out
+
+
+def _scope_ids(
+    query_config: dict[str, Any], adapter: DataSourceAdapter
+) -> tuple[list[str], list[str]]:
+    """按 adapter 的范围语义读出 (上级, 下级) 两组 id。
+
+    Zabbix读主机组/主机，AIOps 读模型/实例。**刻意不在这里判断哪组必填** ——
+    Pydantic 层已保证「至少一组非空且不半截」，精确归属由 adapter 校验。
+    """
+    qc = query_config or {}
+    if getattr(adapter, "scope_kind", "host") == "model_instance":
+        upper = _clean_keys(qc.get("model_ids"), "model_ids")
+        lower = _clean_keys(qc.get("instance_ids"), "instance_ids")
+    else:
+        upper = _clean_keys(qc.get("host_group_ids"), "host_group_ids")
+        lower = _clean_keys(qc.get("host_ids"), "host_ids")
+    return upper, lower
+
+
+def _scope_labels(adapter: DataSourceAdapter) -> tuple[str, str]:
+    """范围称谓前缀 (上级, 下级)，用在 formula / object 文案里。
+
+    Zabbix -> ("组", "主机")；AIOps -> ("模型", "实例")。
+    """
+    if getattr(adapter, "scope_kind", "host") == "model_instance":
+        return "模型", "实例"
+    return "组", "主机"
+
+
+def _scope_hints(adapter: DataSourceAdapter) -> tuple[str, str]:
+    """名称获取失败时的降级提示 (上级, 下级)。
+
+    Zabbix 沿用既有的 ``group`` / ``host``（已被
+    ``test_groups_failure_degrades_object`` 锁定，不做无谓改动）；AIOps 用中文。
+    """
+    if getattr(adapter, "scope_kind", "host") == "model_instance":
+        return "模型", "实例"
+    return "group", "host"
+
+
 async def resolve_items(
     metric_def: MetricDefinition, adapter: DataSourceAdapter
 ) -> list[dict[str, Any]]:
@@ -102,10 +156,10 @@ async def resolve_items(
     qc = metric_def.query_config or {}
     raw_items = qc.get("item_ids") or []
     if not raw_items:
-        # 仍需校验主机范围（text fixed 不取数但配置必须自洽）
+        # 仍需校验取数范围（text fixed 不取数但配置必须自洽）
         await _validate_host_scope(qc, adapter)
         return []
-    return await _resolve_scoped_items(qc, adapter, _parse_ids(raw_items, "item_ids"))
+    return await _resolve_scoped_items(qc, adapter, _clean_keys(raw_items, "item_ids"))
 
 
 async def resolve_series_items(
@@ -130,50 +184,59 @@ async def resolve_series_items(
     dup = sorted({i for i in ids if ids.count(i) > 1})
     if dup:
         raise MetricComputeError(f"同一监控项不能重复配置多条曲线: {dup}")
-    items = await _resolve_scoped_items(qc, adapter, [int(s.item_id) for s in parsed])
+    items = await _resolve_scoped_items(qc, adapter, [s.item_id for s in parsed])
     return items, parsed
 
 
 async def _validate_host_scope(
     query_config: dict[str, Any], adapter: DataSourceAdapter
 ) -> tuple[list[int], list[int]]:
-    """校验主机组/主机必填且 host_ids ⊆ host_group_ids（防绕过前端）。"""
-    host_group_ids = _parse_ids(query_config.get("host_group_ids"), "host_group_ids")
-    host_ids = _parse_ids(query_config.get("host_ids"), "host_ids")
-    for field, values in (
-        ("host_group_ids", host_group_ids),
-        ("host_ids", host_ids),
-    ):
-        if not values:
-            raise MetricComputeError(f"query_config.{field} 不能为空")
+    """校验取数范围必填且下级属于所选上级（防绕过前端直接构造 query_config）。
 
-    hosts = await adapter.list_hosts([str(g) for g in host_group_ids])
-    valid_host_ids = {h["host_id"] for h in hosts}
-    unknown = sorted(set(host_ids) - valid_host_ids)
+    范围语义由 ``adapter.scope_kind`` 决定：Zabbix 是主机组/主机，AIOps 是模型/实例。
+    """
+    upper, lower = _scope_ids(query_config, adapter)
+    label = (
+        "模型/实例"
+        if getattr(adapter, "scope_kind", "host") == "model_instance"
+        else "主机组/主机"
+    )
+    for field, values in (("上级", upper), ("下级", lower)):
+        if not values:
+            raise MetricComputeError(f"query_config 取数范围{field}不能为空（{label}）")
+
+    hosts = await adapter.list_hosts(upper)
+    valid_host_ids = {str(h["host_id"]) for h in hosts}
+    unknown = sorted(set(lower) - valid_host_ids)
     if unknown:
-        raise MetricComputeError(
-            f"以下主机不属于所选主机组 {host_group_ids}: {unknown}"
-        )
-    return host_group_ids, host_ids
+        raise MetricComputeError(f"以下下级不属于所选{label} {upper}: {unknown}")
+    try:
+        return [int(x) for x in upper], [int(x) for x in lower]
+    except ValueError:
+        raise MetricComputeError(f"取数范围含非数字 id: {upper + lower}") from None
 
 
 async def _resolve_scoped_items(
-    query_config: dict[str, Any], adapter: DataSourceAdapter, item_ids: list[int]
+    query_config: dict[str, Any], adapter: DataSourceAdapter, keys: list[str]
 ) -> list[dict[str, Any]]:
-    """在指定主机上解析监控项（host 范围校验 + item 存在性校验）。"""
-    _, host_ids = await _validate_host_scope(query_config, adapter)
-    candidates = await adapter.list_items(
-        [str(h) for h in host_ids], value_types=query_config.get("value_type_override")
-    )
-    found = {i["item_id"] for i in candidates}
-    missing = sorted(set(item_ids) - found)
-    if missing:
-        raise MetricComputeError(f"以下监控项未在指定主机中找到: {missing}")
-    wanted = set(item_ids)
-    selected = [i for i in candidates if i["item_id"] in wanted]
-    if not selected:  # pragma: no cover - 上面的 missing 检查已覆盖
-        raise MetricComputeError("未解析到任何监控项，请检查 query_config")
-    return selected
+    """在指定范围内解析取数对象，产出带**整数 id** 的元信息列表。
+
+    范围校验与定位串解析都交给 adapter（``resolve_scoped_items``）——
+    Zabbix 的「定位串 == 数字 item_id」与 AIOps 的四元组编码差异很大，
+    放在这里分支会让 calc_engine 变成数据源方言的堆积场。
+
+    adapter 抛的 ``AdapterError`` 转成 ``MetricComputeError``，保持 422 语义
+    （AdapterError 默认会被映射成 502「数据源侧问题」）。
+    """
+    upper, lower = _scope_ids(query_config, adapter)
+    if not upper or not lower:
+        await _validate_host_scope(query_config, adapter)
+    try:
+        return await adapter.resolve_scoped_items(
+            upper_ids=upper, lower_ids=lower, keys=keys
+        )
+    except AdapterError as exc:
+        raise MetricComputeError(str(exc)) from None
 
 
 async def _resolve_scope_names(
@@ -181,42 +244,51 @@ async def _resolve_scope_names(
     query_config: dict[str, Any],
     items: list[dict[str, Any]],
 ) -> tuple[list[str], list[str]]:
-    """解析主机组名与主机名（供 object / formula 证据描述）。
+    """解析上级与下级的名称（供 object / formula 证据描述）。
 
-    数据源不可达时降级为 "group #id (名称获取失败)" / "host #id"。
-    """
-    host_group_ids = _parse_ids(query_config.get("host_group_ids"), "host_group_ids")
+Zabbix 是「主机组 / 主机」，AIOps 是「模型 / 实例」—— 文案跟着
+``adapter.scope_kind`` 走，否则月报里会出现「模型: 路由交换 / 主机: xxx」
+这种把实例叫成主机的错话。
+数据源不可达时降级为 "#id (名称获取失败)"；Zabbix 侧沿用既有的
+``group #id`` / ``host #id`` 文案（已被单测锁定，不做无谓改动）。
+"""
+    upper_hint, lower_hint = _scope_hints(adapter)
+
+    upper_ids, lower_ids = _scope_ids(query_config, adapter)
     try:
         groups = await adapter.list_host_groups()
-        name_map = {g["group_id"]: g["name"] for g in groups}
-        group_names = [
-            name_map.get(gid, f"group #{gid} (名称获取失败)") for gid in host_group_ids
+        name_map = {str(g["group_id"]): g["name"] for g in groups}
+        upper_names = [
+            name_map.get(gid, f"{upper_hint} #{gid} (名称获取失败)")
+            for gid in upper_ids
         ]
     except AdapterError:
-        logger.warning("list_host_groups 失败，范围描述降级为组 ID")
-        group_names = [f"group #{gid} (名称获取失败)" for gid in host_group_ids]
+        logger.warning("list_host_groups 失败，范围描述降级为 ID")
+        upper_names = [f"{upper_hint} #{gid} (名称获取失败)" for gid in upper_ids]
 
-    host_names: list[str] = []
-    host_name_map: dict[int, str] = {}
+    lower_name_map: dict[str, str] = {}
     for i in items:
         hid = i.get("host_id")
-        if hid is None or hid in host_name_map:
+        if hid is None or str(hid) in lower_name_map:
             continue
-        host_name_map[hid] = i.get("host") or f"host #{hid}"
-    host_ids = _parse_ids(query_config.get("host_ids"), "host_ids")
-    for hid in host_ids:
-        if hid in host_name_map:
-            host_names.append(host_name_map[hid])
-    return group_names, host_names
+        lower_name_map[str(hid)] = i.get("host") or f"{lower_hint} #{hid}"
+    lower_names = [
+        lower_name_map.get(hid, f"{lower_hint} #{hid}") for hid in lower_ids
+    ]
+    return upper_names, lower_names
 
 
 def _build_object_desc(
     group_names: list[str],
     items: list[dict[str, Any]],
+    host_noun: str = "台主机",
 ) -> str:
-    """组装 object 证据描述："组名（N 台主机, M 个监控项）"。"""
+    """组装 object 证据描述："组名（N 台主机, M 个监控项）"。
+
+    ``host_noun`` 带量词，供 AIOps 传「个实例」（"台实例" 不通顺）。
+    """
     n_hosts = len({i.get("host_id") for i in items})
-    return f"{', '.join(group_names)}（{n_hosts} 台主机, {len(items)} 个监控项）"
+    return f"{', '.join(group_names)}（{n_hosts} {host_noun}, {len(items)} 个监控项）"
 
 
 def _build_formula_desc(
@@ -226,10 +298,15 @@ def _build_formula_desc(
     n_items: int,
     group_names: list[str],
     host_names: list[str],
+    upper_label: str = "组",
+    lower_label: str = "主机",
 ) -> str:
     """组装 formula 证据描述（可追溯实际口径）。"""
     column = AGG_TO_COLUMN[agg]
-    scope = f"组: {', '.join(group_names)}; 主机: {', '.join(host_names)}"
+    scope = (
+        f"{upper_label}: {', '.join(group_names)}; "
+        f"{lower_label}: {', '.join(host_names)}"
+    )
     desc = f"{agg}(trend.hourly.{column}) → {agg} over {n_items} items [{scope}]"
     if compare != "none":
         desc += f" → {compare}({lookback} calendar month)"
@@ -517,36 +594,44 @@ async def _compute_curve(
 
     meta_by_id = {i["item_id"]: i for i in items}
     default_tf = type_cfg.transform_default
+    # items 与 series_list 顺序一一对应（resolve_series_items 保证顺序稳定），
+    # item_id 已由 adapter 归一为整数 —— 这里不能再 int(s.item_id)，
+    # 因为 AIOps 的定位串不是数字。
+    synthetic_ids = [int(i["item_id"]) for i in items]
     payload_series: list[dict[str, Any]] = []
-    for s in series_list:
-        iid = int(s.item_id)
+    for idx, s in enumerate(series_list):
+        iid = synthetic_ids[idx] if idx < len(synthetic_ids) else idx
         tf = s.transform or default_tf
         raw_points = sorted(by_item.get(iid, []), key=lambda p: p[0])
         meta = meta_by_id.get(iid, {})
         payload_series.append(
             {
-                "name": s.display_name or meta.get("name") or f"item-{iid}",
-                "item_id": str(iid),
+                "name": s.display_name or meta.get("name") or f"item-{s.item_id}",
+                "item_id": str(s.item_id),
                 "points": [[ts, tf.apply(v)] for ts, v in raw_points],
             }
         )
 
     qc = metric_def.query_config or {}
     group_names, host_names = await _resolve_scope_names(adapter, qc, items)
+    upper_label, lower_label = _scope_labels(adapter)
+    host_noun = "台主机" if lower_label == "主机" else "个实例"
     n_hosts = len({i.get("host_id") for i in items})
     object_desc = (
-        f"{', '.join(group_names)}（{n_hosts} 台主机, {len(payload_series)} 条曲线）"
+        f"{', '.join(group_names)}（{n_hosts} {host_noun}, {len(payload_series)} 条曲线）"
     )
     parts: list[str] = []
-    for sc in series_list:
+    for idx, sc in enumerate(series_list):
         tf = sc.transform or default_tf
-        seg = f"{sc.display_name or f'item-{sc.item_id}'}: {len(by_item.get(int(sc.item_id), []))} 点"
+        sid = synthetic_ids[idx] if idx < len(synthetic_ids) else idx
+        seg = f"{sc.display_name or f'item-{sc.item_id}'}: {len(by_item.get(sid, []))} 点"
         if not tf.is_identity:
             seg += f" ×{tf.mul} + {tf.add}"
         parts.append(seg)
     formula_desc = (
-        "raw(trend.hourly.value_avg) per series [组: "
-        f"{', '.join(group_names)}; 主机: {', '.join(host_names)}] → " + "; ".join(parts)
+        "raw(trend.hourly.value_avg) per series ["
+        f"{upper_label}: {', '.join(group_names)}; "
+        f"{lower_label}: {', '.join(host_names)}] → " + "; ".join(parts)
     )
 
     total_points = sum(len(s["points"]) for s in payload_series)
@@ -655,11 +740,14 @@ async def _compute_pie(
 
     qc = metric_def.query_config or {}
     group_names, host_names = await _resolve_scope_names(adapter, qc, items)
-    object_desc = _build_object_desc(group_names, items)
+    upper_label, lower_label = _scope_labels(adapter)
+    host_noun = "台主机" if lower_label == "主机" else "个实例"
+    object_desc = _build_object_desc(group_names, items, host_noun=host_noun)
     formula_desc = (
         f"count(hour value_max∈{{{','.join(pie_cfg.up_values)}}})={up_count} / "
         f"count(hour value_max∈{{{','.join(pie_cfg.down_values)}}})={down_count}"
-        f" → 占比 [组: {', '.join(group_names)}; 主机: {', '.join(host_names)}]"
+        f" → 占比 [{upper_label}: {', '.join(group_names)}; "
+        f"{lower_label}: {', '.join(host_names)}]"
     )
     if unknown_count:
         formula_desc += f"（未归类 {unknown_count} 小时已排除）"
@@ -757,8 +845,19 @@ async def _compute_scalar(
 
     qc = metric_def.query_config or {}
     group_names, host_names = await _resolve_scope_names(adapter, qc, items)
-    object_desc = _build_object_desc(group_names, items)
-    formula_desc = _build_formula_desc(agg, compare, lookback, n_items, group_names, host_names)
+    upper_label, lower_label = _scope_labels(adapter)
+    host_noun = "台主机" if lower_label == "主机" else "个实例"
+    object_desc = _build_object_desc(group_names, items, host_noun=host_noun)
+    formula_desc = _build_formula_desc(
+        agg,
+        compare,
+        lookback,
+        n_items,
+        group_names,
+        host_names,
+        upper_label=upper_label,
+        lower_label=lower_label,
+    )
     if not transform.is_identity:
         formula_desc += f" → ×{transform.mul} + {transform.add}"
 
@@ -801,7 +900,8 @@ async def _compute_text(
         raise MetricComputeError(f"type_config.text_config 非法: {exc}") from None
 
     try:
-        period_to_unix_range(period)  # 周期格式校验（text 也要求合法 period）
+        # text 也要合法的 period：mode=latest 会用它取「周期末点」
+        start, end = period_to_unix_range(period)
     except ValueError as exc:
         raise MetricComputeError(str(exc)) from exc
 
@@ -818,7 +918,11 @@ async def _compute_text(
     else:
         if len(items) != 1:
             raise MetricComputeError("text mode=latest 需要恰好一个监控项")
-        latest = await adapter.fetch_latest_value(items[0]["item_id"])
+        # 传周期区间：AIOps 侧据此取「周期末点」而不是「调用时刻的当前值」，
+        # 这样报告重跑结果稳定可复核；Zabbix 侧忽略该区间，行为与升级前一致。
+        latest = await adapter.fetch_latest_value(
+            items[0]["item_id"], start, end
+        )
         if latest is None:
             raise MetricComputeError(f"监控项 {items[0]['item_id']} 无历史数据")
         text_value = str(latest.get("value", ""))
@@ -829,7 +933,10 @@ async def _compute_text(
             if stamp
             else "未知时间"
         )
-        formula_desc = f"history.get(limit=1) 最新原始值 @ {when}（mode=latest，不聚合）"
+        formula_desc = (
+            f"区间内最后一个原始值 @ {when}（mode=latest，不聚合；"
+            f"周期 {period}）"
+        )
 
     logger.info(
         "指标计算完成 name=%s type=text period=%s mode=%s",

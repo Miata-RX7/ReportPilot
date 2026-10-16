@@ -102,7 +102,9 @@ class TypeAdapter_(DataSourceAdapter):
             }
         ]
 
-    async def fetch_latest_value(self, item_id: int):
+    async def fetch_latest_value(
+        self, item_id: int, time_from: int | None = None, time_till: int | None = None
+    ):
         self.latest_calls.append(item_id)
         return self._latest
 
@@ -391,7 +393,9 @@ class TestText:
         )
         assert fact.value == {"text": "0.85"}
         assert adapter.latest_calls == [101]
-        assert "history.get" in fact.formula
+        # 2026-10-16 起 text 取「区间内最后一个原始值」（AIOps 周期末点语义），
+        # formula 随之改写；断言意图是「走了 latest 取数路径而非固定文案」
+        assert "mode=latest" in fact.formula
 
     async def test_mode_latest_without_data_raises(self) -> None:
         adapter = TypeAdapter_({}, latest=None)
@@ -531,7 +535,8 @@ class TestCreateUnionValidation:
         assert m.query_config.item_ids == []
 
     def test_scope_still_required(self) -> None:
-        with pytest.raises(ValidationError, match="取数范围以下为空"):
+        # 上级与下级必须成对：只给 host_group_ids 不给 host_ids 应直接拒绝
+        with pytest.raises(ValidationError, match="上级与下级必须成对填写"):
             self.ta.validate_python(
                 {
                     **self._base(),
@@ -539,6 +544,29 @@ class TestCreateUnionValidation:
                     "query_config": {"host_group_ids": ["4"], "item_ids": ["101"]},
                 }
             )
+        # 两组都没给也要拒绝
+        with pytest.raises(ValidationError, match="取数范围为空"):
+            self.ta.validate_python(
+                {
+                    **self._base(),
+                    "metric_type": "scalar",
+                    "query_config": {"item_ids": ["101"]},
+                }
+            )
+        # AIOps 的模型 / 实例同样是合法范围
+        ok = self.ta.validate_python(
+            {
+                **self._base(),
+                "metric_type": "scalar",
+                "query_config": {
+                    "model_ids": ["22"],
+                    "instance_ids": ["14009"],
+                    "item_ids": ["10143"],
+                },
+            }
+        )
+        assert ok.query_config.model_ids == ["22"]
+        assert ok.query_config.instance_ids == ["14009"]
 
     def test_unit_scale_allowed_for_scalar(self) -> None:
         m = self.ta.validate_python(

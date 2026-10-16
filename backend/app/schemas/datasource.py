@@ -56,20 +56,60 @@ class ConnectionTestResult(BaseModel):
 
 
 class HostGroupRef(BaseModel):
-    """主机组下拉项。"""
+    """主机组下拉项（AIOps 语义为「模型」）。
+
+    instance_num / template_num 仅 AIOps 返回，供前端提示「这个模型有多少实例」，
+    并说明为什么 0 实例的模型不会出现在列表里。
+    """
 
     group_id: str
     name: str
+    instance_num: int | None = None
+    template_num: int | None = None
 
 
 class HostRef(BaseModel):
     host_id: str
     name: str
     groups: list[HostGroupRef] = Field(default_factory=list)
+    # AIOps 的 show_attr.ip（实测恒为字符串）；Zabbix 无IP 概念
+    ip: str | None = None
+
+
+class AIOpsColumn(BaseModel):
+    """list 型监控项的一列。
+
+    value_type 决定该列能配成什么指标（见 services/aiops_keys.py 的判定表）：
+    - text列 -> 只能text
+    - number + has_history -> scalar / curve
+    - number + 无 history -> 只能 scalar（当前值兜单点，画曲线必空）
+    """
+
+    column_id: int
+    name: str
+    unit: str
+    value_type: Literal["number", "text"]
+    has_history: bool
+    is_primary: bool
+
+
+class ItemRowRef(BaseModel):
+    """list 型监控项的一个主键行。
+
+    只返回**该列当前值非空**的行 —— 实测「当前值非空」⟺「有历史」，
+    过滤掉空行可以避免用户选到「选了没数据」的项。
+    """
+
+    row_key: str
+    current_value: str = ""
+    as_of: int = 0
 
 
 class ItemRef(BaseModel):
-    """监控项下拉项。id 一律以字符串返回，与 query_config 的字符串口径一致。"""
+    """监控项下拉项。id 一律以字符串返回，与 query_config 的字符串口径一致。
+
+    ``aiops_*`` 字段仅 AIOps 有值，Zabbix 一律为 None/空 —— 前端据此切换级联层级。
+    """
 
     item_id: str
     name: str
@@ -78,3 +118,11 @@ class ItemRef(BaseModel):
     host: str
     value_type: int
     units: str
+    # ---- AIOps 扩展 ----
+    # 一律用 None 而非空列表 / 空串：配合端点的 response_model_exclude_none=True，
+    # **Zabbix 的响应体逐字不变**，不给存量前端凭空塞几个空字段。
+    aiops_data_type: Literal["number", "text", "list"] | None = None
+    aiops_columns: list[AIOpsColumn] | None = None
+    aiops_template_id: int | None = None
+    aiops_template_name: str | None = None
+    aiops_cycle: int | None = None

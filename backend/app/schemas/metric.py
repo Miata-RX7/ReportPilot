@@ -300,23 +300,55 @@ class TextTypeConfig(BaseModel):
 # query_config（分类型）
 # --------------------------------------------------------------------------
 class _ScopeBase(BaseModel):
-    """主机组 / 主机：所有类型共有且必填。"""
+    """取数范围：Zabbix 是「主机组 / 主机」，AIOps 是「模型 / 实例」。
 
+    两组字段都放在同一个基类里，各取所需、互不混用。Pydantic 层**只做结构性
+    检查**（至少一组非空），「这个数据源必须填哪一组」由 service 层按
+    ``DataSource.type`` 强校验 —— schema 拿不到数据源类型，硬判会写死。
+    """
+
+    # Zabbix
     host_group_ids: list[str] = Field(default_factory=list)
     host_ids: list[str] = Field(default_factory=list)
+    # AIOps（语义：模型 / 实例）
+    model_ids: list[str] = Field(default_factory=list)
+    instance_ids: list[str] = Field(default_factory=list)
 
-    _clean_groups = field_validator("host_group_ids", mode="before")(_clean_ids)
-    _clean_hosts = field_validator("host_ids", mode="before")(_clean_ids)
+    _clean_groups = field_validator(
+        "host_group_ids", "model_ids", mode="before"
+    )(_clean_ids)
+    _clean_hosts = field_validator(
+        "host_ids", "instance_ids", mode="before"
+    )(_clean_ids)
 
     @model_validator(mode="after")
     def _check_scope(self) -> "_ScopeBase":
-        missing = [
-            name
-            for name in ("host_group_ids", "host_ids")
-            if not getattr(self, name)
+        """至少一组「上级 + 下级」都填了。
+
+        只要填了其中一半就算配置错误：半截范围会在取数时才暴露成一句
+        难以定位的报错（Zabbix 报「主机不在主机组里」，AIOps 报「实例不在模型里」），
+        不如在保存时就拦下。
+        """
+        pairs = (
+            ("host_group_ids", "host_ids", "Zabbix 主机组/主机"),
+            ("model_ids", "instance_ids", "AIOps 模型/实例"),
+        )
+        complete = [
+            label
+            for upper, lower, label in pairs
+            if getattr(self, upper) and getattr(self, lower)
         ]
-        if missing:
-            raise ValueError(f"取数范围以下为空: {', '.join(missing)}")
+        partial = [
+            label
+            for upper, lower, label in pairs
+            if bool(getattr(self, upper)) != bool(getattr(self, lower))
+        ]
+        if partial:
+            raise ValueError(
+                f"取数范围：{'、'.join(partial)} 上级与下级必须成对填写"
+            )
+        if not complete:
+            raise ValueError("取数范围为空：请选择主机组与主机，或模型与实例")
         return self
 
 
@@ -409,12 +441,17 @@ class CalcFormula(BaseModel):
 # 读接口：query_config 保持宽松（按 metric_type 形态不同）
 # --------------------------------------------------------------------------
 class QueryConfig(BaseModel):
-    """读取用宽松结构：scalar/pie/text 用 item_ids，curve 用 series。"""
+    """读取用宽松结构：scalar/pie/text 用 item_ids，curve 用 series。
+
+    取数范围两组都在（Zabbix 主机组/主机、AIOps 模型/实例），前端按数据源类型取用。
+    """
 
     model_config = ConfigDict(extra="allow")
 
     host_group_ids: list[str] = Field(default_factory=list)
     host_ids: list[str] = Field(default_factory=list)
+    model_ids: list[str] = Field(default_factory=list)
+    instance_ids: list[str] = Field(default_factory=list)
     item_ids: list[str] = Field(default_factory=list)
     series: list[dict[str, Any]] = Field(default_factory=list)
     value_type_override: list[int] | None = None

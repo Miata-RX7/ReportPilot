@@ -211,11 +211,19 @@ class ZabbixAdapter(DataSourceAdapter):
             for i in result
         ]
 
-    async def fetch_latest_value(self, item_id: int) -> dict[str, Any] | None:
-        """history.get limit=1 取最新原始采样值（text mode=latest 用）。
+    async def fetch_latest_value(
+        self,
+        item_id: int,
+        time_from: int | None = None,
+        time_till: int | None = None,
+    ) -> dict[str, Any] | None:
+        """history.get limit=1 取最新一条原始采样值（text mode=latest 用）。
 
-        sortfield=clock desc 保证是"最新"；time_from 不设，取服务端保留的
-        全部历史中的最后一条。
+        sortfield=clock / sortorder=DESC 保证是「最新」；不传 time_till，
+        取服务端保留的全部历史中的最后一条。
+
+        ``time_from`` / ``time_till`` 是为 AIOps「周期末点」语义预留的可选区间，
+        **Zabbix 刻意忽略**（仍然取全历史最后一条），保持升级前行为完全一致。
         """
         result: list[dict[str, Any]] = await self._call(
             "history.get",
@@ -223,28 +231,6 @@ class ZabbixAdapter(DataSourceAdapter):
                 "output": ["itemid", "clock", "value", "units"],
                 "history": 1,
                 "itemids": [str(item_id)],
-                "sortfield": "clock",
-                "sortorder": "DESC",
-                "limit": 1,
-            },
-        )
-        if not result:
-            return None
-        row = result[0]
-        return {
-            "item_id": int(row["itemid"]),
-            "clock": int(row["clock"]),
-            "value": row.get("value", ""),
-            "units": row.get("units", ""),
-        }
-
-    async def fetch_latest_value(self, item_id: int) -> dict[str, Any] | None:
-        """history.get limit=1 取最新一条原始采样值（text mode=latest 用）。"""
-        result: list[dict[str, Any]] = await self._call(
-            "history.get",
-            {
-                "output": ["itemid", "clock", "value", "units"],
-                "history": int(item_id),
                 "sortfield": "clock",
                 "sortorder": "DESC",
                 "limit": 1,
