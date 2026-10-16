@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import axios from 'axios'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import { MoreFilled, QuestionFilled } from '@element-plus/icons-vue'
 
 import { confirmDelete } from '@/components/ConfirmDialog'
+import AiopsScopePicker from '@/components/AiopsScopePicker.vue'
 import DataTable from '@/components/DataTable.vue'
 import FormDialog from '@/components/FormDialog.vue'
 import PageHeader from '@/components/PageHeader.vue'
@@ -40,6 +41,7 @@ import {
 import type { TimeQuickOffset } from '@/api/types'
 import { useAuthStore } from '@/stores/auth'
 import { parseApiError } from '@/utils/error'
+import { type AiopsPick } from '@/utils/aiopsRef'
 import {
   changePctClass,
   factDisplayNumber,
@@ -120,6 +122,9 @@ const form = reactive({
   tags: [] as string[],
   host_group_ids: [] as string[],
   host_ids: [] as string[],
+  // AIOps：模型 / 实例（语义对应主机组 / 主机，由 AiopsScopePicker 维护）
+  model_ids: [] as string[],
+  instance_ids: [] as string[],
   item_ids: [] as string[],
   agg: 'avg' as AggType,
   compare: 'none' as CompareType,
@@ -169,6 +174,52 @@ let itemAbort: AbortController | null = null
 
 const dialogTitle = computed(() => (editingId.value === null ? '新增指标' : '编辑指标'))
 const dsId = computed(() => form.data_source_id)
+
+/* ---- AIOps 取数（独立级联组件，与 Zabbix 三级联并存） ---- */
+
+/** 所选数据源的类型：决定用哪一套级联、能不能选饼图 */
+const dsType = computed(
+  () => dataSources.value.find((d) => d.id === dsId.value)?.type ?? '',
+)
+const isAiopsDs = computed(() => dsType.value === 'aiops')
+
+/** AIOps 级联选出的取数对象（存的是定位串） */
+const aiopsPicks = ref<AiopsPick[]>([])
+
+/** AIOps 下模型/实例由独立组件维护；切数据源时必须清干净 */
+watch(dsId, () => {
+  form.model_ids = []
+  form.instance_ids = []
+  aiopsPicks.value = []
+})
+
+/**
+ * 真正落库的取数对象 id 列表。
+ * AIOps 存定位串（n:/l: 前缀），Zabbix 存纯数字 item_id —— 两者不可混用。
+ */
+const effectiveItemIds = computed(() =>
+  isAiopsDs.value ? aiopsPicks.value.map((p) => p.ref) : [...form.item_ids],
+)
+
+/** AIOps 的曲线直接由picks 派生（每行一个取数对象 = 一条曲线）。 */
+const effectiveSeries = computed(() =>
+  isAiopsDs.value
+    ? aiopsPicks.value.map((p) => ({
+        item_id: p.ref,
+        display_name: p.label,
+        mul: 1,
+        add: 0,
+      }))
+    : form.series,
+)
+
+/** AIOps 不支持饼图（无 Zabbix 那样的 UP/DOWN 值域语义），选到就落回 scalar */
+watch(
+  () => form.metric_type,
+  (t) => {
+    if (isAiopsDs.value && t === 'pie') form.metric_type = 'scalar'
+  },
+)
 
 /* ---- 试算抽屉 ---- */
 const drawVisible = ref(false)
@@ -913,6 +964,14 @@ const unitPreviewText = computed(() => {
  * 落库单位：pie 恒为占比（%）、text 无单位、time 不取数（顺带清掉切类型后残留的旧单位）；
  * 其余类型用用户所选（含自定义）单位。
  */
+/** AIOps 级联：范围变了就清掉已选取数对象（跨实例的定位串已失效） */
+function onAiopsScopeChange() {
+  aiopsPicks.value = []
+  form.item_ids = []
+  form.series = []
+  pieSuitability.value = null
+}
+
 function normalizedUnit(): string {
   if (form.metric_type === 'pie') return '%'
   if (form.metric_type === 'text' || form.metric_type === 'time') return ''
@@ -920,9 +979,14 @@ function normalizedUnit(): string {
 }
 
 function buildPayload(): MetricDefinitionCreate {
+  // 取数范围按数据源类型切换：AIOps 用「模型 / 实例」，Zabbix 用「主机组 / 主机」。
+  // 两组都带上（另一组为空数组）——后端 _ScopeBase 要求「成对且至少一组完整」，
+  // 空数组等价于未填。
   const scope = {
     host_group_ids: [...form.host_group_ids],
     host_ids: [...form.host_ids],
+    model_ids: [...form.model_ids],
+    instance_ids: [...form.instance_ids],
   }
   const common = {
     metric_type: form.metric_type,
@@ -942,7 +1006,7 @@ function buildPayload(): MetricDefinitionCreate {
       query_config: {
         ...scope,
         item_ids: [],
-        series: form.series
+        series: effectiveSeries.value
           .filter((x) => x.item_id)
           .map((x) => ({
             item_id: x.item_id,
@@ -960,7 +1024,7 @@ function buildPayload(): MetricDefinitionCreate {
     return {
       ...common,
       metric_type: 'pie',
-      query_config: { ...scope, item_ids: form.pie_item_id ? [form.pie_item_id] : [] },
+      query_config: { ...scope, item_ids: effectiveItemIds.value.slice(0, 1) },
       type_config: {
         pie_config: {
           up_values: [...form.pie_up],
@@ -999,7 +1063,7 @@ function buildPayload(): MetricDefinitionCreate {
       metric_type: 'text',
       query_config: {
         ...scope,
-        item_ids: form.text_mode === 'latest' ? [...form.item_ids].slice(0, 1) : [],
+        item_ids: form.text_mode === 'latest' ? effectiveItemIds.value.slice(0, 1) : [],
       },
       type_config: {
         text_config: {
@@ -1012,7 +1076,7 @@ function buildPayload(): MetricDefinitionCreate {
   return {
     ...common,
     metric_type: 'scalar',
-    query_config: { ...scope, item_ids: [...form.item_ids] },
+    query_config: { ...scope, item_ids: effectiveItemIds.value },
     type_config: {
       transform: { mul: Number(form.transform_mul), add: Number(form.transform_add) },
     },
@@ -1395,6 +1459,22 @@ onMounted(load)
 
         <template v-if="form.metric_type !== 'time'">
         <div class="form-section">取数配置</div>
+
+        <!-- AIOps：独立级联（模型 → 实例 → 监控项 → 列 → 主键行） -->
+        <AiopsScopePicker
+          v-if="isAiopsDs"
+          :datasource-id="form.data_source_id"
+          :model-ids="form.model_ids"
+          :instance-ids="form.instance_ids"
+          :picks="aiopsPicks"
+          @update:model-ids="form.model_ids = $event"
+          @update:instance-ids="form.instance_ids = $event"
+          @update:picks="aiopsPicks = $event"
+          @scope-change="onAiopsScopeChange"
+        />
+
+        <!-- Zabbix：原有三级联（路径与升级前完全一致） -->
+        <template v-else>
         <el-form-item label="主机组" prop="host_group_ids">
           <el-select
             v-model="form.host_group_ids"
@@ -1488,11 +1568,12 @@ onMounted(load)
             />
           </el-select>
         </el-form-item>
+        </template>
+        <!-- /Zabbix 三级联 -->
 
         <!-- curve：每条曲线独立指定 item / 展示名 / 数值变换 -->
-        </template>
 
-        <template v-if="form.metric_type === 'curve'">
+        <template v-if="form.metric_type === 'curve' && !isAiopsDs">
           <div class="form-section">曲线配置</div>
           <div
             v-for="(row, idx) in form.series"
@@ -1620,6 +1701,8 @@ onMounted(load)
             </el-select>
           </el-form-item>
         </template>
+        </template>
+        <!-- /取数配置（curve / pie 区块随metric_type 切换，时间类型不取数） -->
 
         <template v-if="form.metric_type === 'time'">
           <div class="form-section">时间格式</div>

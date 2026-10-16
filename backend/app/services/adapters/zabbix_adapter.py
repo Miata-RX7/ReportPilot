@@ -150,11 +150,16 @@ class ZabbixAdapter(DataSourceAdapter):
             {"group_id": int(g["groupid"]), "name": g["name"]} for g in result
         ]
 
-    async def list_hosts(self, group_ids: list[str]) -> list[dict[str, Any]]:
+    async def list_hosts(
+        self, group_ids: list[str], q: str | None = None
+    ) -> list[dict[str, Any]]:
         """按主机组列出主机。
 
         Zabbix 6.4+/7.x 中 host.get 取所属组必须用 selectHostGroups；
         旧参数 selectGroups 会静默返回空数组。
+
+        ``q`` 被**刻意忽略** —— Zabbix 侧主机数量可控，且前端已有 filterable，
+        不需要服务端搜索；该参数只为统一 AIOps 的调用签名而存在。
         """
         if not group_ids:
             raise AdapterAPIError(None, "list_hosts 需要 group_ids")

@@ -28,7 +28,11 @@ export interface TokenResponse {
 
 export interface DataSourceConfig {
   url: string
-  auth_type: 'bearer'
+  /**
+   * Zabbix 专有：JSON-RPC 的鉴权方式。AIOps 走 HTTP header `token`，
+   * 不带这个字段（实测不带 token 会返回 code=9 auth failed）。
+   */
+  auth_type?: 'bearer'
   timeout: number
   verify_ssl: boolean
 }
@@ -68,11 +72,20 @@ export type AggType = 'sum' | 'avg' | 'max' | 'min'
 export type CompareType = 'none' | 'mom' | 'yoy'
 
 export interface QueryConfig {
-  /** 主机组（必填，至少 1 个） */
+  /** Zabbix 主机组（与 host_ids 成对出现） */
   host_group_ids: string[]
-  /** 主机（必填，须属于 host_group_ids） */
+  /** Zabbix 主机（须属于 host_group_ids） */
   host_ids: string[]
-  /** 监控项：scalar 多选 / pie 严格 1 个 / text 0~1 个（mode=fixed 可空） */
+  /** AIOps 模型（与 instance_ids 成对出现；语义对应「主机组」）。Zabbix 指标不传。 */
+  model_ids?: string[]
+  /** AIOps 实例（须属于 model_ids；语义对应「主机」）。Zabbix 指标不传。 */
+  instance_ids?: string[]
+  /**
+   * 取数对象：scalar 多选 / pie 严格 1 个 / text 0~1 个（mode=fixed 可空）
+   *
+   * Zabbix 存纯数字 item_id；AIOps 存**定位串**（见 `utils/aiopsRef.ts`）：
+   * `n:<实例>:<监控项>` 或 `l:<实例>:<监控项>:<列>:<b64url(主键行)>`。
+   */
   item_ids: string[]
   /** curve 专用：每条曲线独立指定 item 与展示名 */
   series?: CurveSeriesConfig[]
@@ -248,12 +261,40 @@ export interface MetricDefinitionUpdate {
 export interface HostGroupRef {
   group_id: string
   name: string
+  /** AIOps：该模型下的实例数（用于下拉里的提示）；Zabbix 不返回 */
+  instance_num?: number | null
+  /** AIOps：该模型的模板数；Zabbix 不返回 */
+  template_num?: number | null
 }
 
 export interface HostRef {
   host_id: string
   name: string
   groups: HostGroupRef[]
+  /** AIOps：实例 IP（实测 show_attr.ip 恒为字符串）；Zabbix 不返回 */
+  ip?: string | null
+}
+
+/**
+ * AIOps list 型监控项的一列。
+ *
+ * 由 `item/list` 的 `source_*` 平行数组解出，**不需要额外请求**。
+ * `has_history` 是**列级能力标志**，不保证每一行都有数据。
+ */
+export interface AIOpsColumn {
+  column_id: number
+  name: string
+  unit: string
+  value_type: 'number' | 'text'
+  has_history: boolean
+  is_primary: boolean
+}
+
+/** AIOps list 型监控项的一个主键行（只返回该列当前值非空的行）。 */
+export interface ItemRowRef {
+  row_key: string
+  current_value: string
+  as_of: number
 }
 
 export interface ItemRef {
@@ -264,6 +305,15 @@ export interface ItemRef {
   host: string
   value_type: number
   units: string
+  /* ---- AIOps 扩展：Zabbix 下均为 undefined，后端已用 exclude_none 保证不出现 ---- */
+  /** 监控项级类型，决定是否要展开「列 -> 主键行」两级 */
+  aiops_data_type?: 'number' | 'text' | 'list'
+  /** list 型才有的列元数据；number / text 型为空 */
+  aiops_columns?: AIOpsColumn[]
+  aiops_template_id?: number | null
+  aiops_template_name?: string | null
+  /** 采样周期（秒），实测普遍为 60 */
+  aiops_cycle?: number | null
 }
 
 /** curve 的一条曲线（后端 CurveFact） */

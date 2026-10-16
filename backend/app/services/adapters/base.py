@@ -63,8 +63,13 @@ class DataSourceAdapter(ABC):
         """列出主机组，供指标配置选择。"""
 
     @abstractmethod
-    async def list_hosts(self, group_ids: list[str]) -> list[dict[str, Any]]:
+    async def list_hosts(
+        self, group_ids: list[str], q: str | None = None
+    ) -> list[dict[str, Any]]:
         """按主机组列出主机（group_ids 必传，不支持空=全量）。
+
+        ``q`` 是可选的名称/ IP 子串过滤：AIOps 的实例下拉可能有几百条，需要搜索；
+        **Zabbix 刻意忽略**（它已有前端侧的 filterable），保持升级前行为一致。
 
         返回 [{"host_id", "name", "groups": [{"group_id", "name"}]}]。
         """
