@@ -94,22 +94,6 @@ _MODEL_NAMES_AT: float = 0.0
 _CACHE_LOCK = threading.Lock()
 
 
-async def _model_name(adapter: AIOpsAdapter, model_id: int) -> str:
-    """取模型名（带进程内缓存）；缓存空时按需拉一次模型列表。
-
-    ``list_hosts`` 要给每个实例回填所属模型名，但模型名只在 ``model/base/list``
-    里 —— 前端通常先加载模型下拉，正常流程下缓存已热；这里兜住「直接打
-    hosts 接口」的情况（比如首屏、深链接、编辑回显）。
-    """
-    with _CACHE_LOCK:
-        hit = _MODEL_NAMES.get(model_id)
-    if hit:
-        return hit
-    await adapter.list_host_groups()
-    with _CACHE_LOCK:
-        return _MODEL_NAMES.get(model_id, f"模型 #{model_id}")
-
-
 def _register_key(key: str) -> int:
     """定位串 -> 合成整数（进程内稳定，首次见到时分配）。"""
     with _KEY_LOCK:
@@ -913,3 +897,23 @@ def _format_scalar(value: Any) -> str:
     if number == int(number):
         return str(int(number))
     return f"{number:g}"
+
+
+async def _model_name(adapter: "AIOpsAdapter", model_id: int) -> str:
+    """取模型名（带进程内缓存）；缓存空时按需拉一次模型列表。
+
+    ``list_hosts`` 要给每个实例回填所属模型名，但模型名只在 ``model/base/list``
+    里 —— 前端通常先加载模型下拉，正常流程下缓存已热；这里兜住「直接打
+    hosts 接口」的情况（首屏、深链接、编辑回显）。
+
+    注解刻意写成字符串：函数放在类定义之后，而 **Python 3.11 会在定义处立即
+    求值注解**，直接写 ``AIOpsAdapter`` 会 NameError（本机 3.14 延迟求值不报，
+    生产 3.11 报 —— 见 AGENTS.md §3.9，已栽过一次）。
+    """
+    with _CACHE_LOCK:
+        hit = _MODEL_NAMES.get(model_id)
+    if hit:
+        return hit
+    await adapter.list_host_groups()
+    with _CACHE_LOCK:
+        return _MODEL_NAMES.get(model_id, f"模型 #{model_id}")
