@@ -87,7 +87,27 @@ _SEARCH_PARAM_OK: bool | None = None
 
 _STATUS_CACHE: dict[tuple[int, int], tuple[float, dict[str, list[str]], int]] = {}
 _ITEM_META_CACHE: dict[tuple[int, int], tuple[float, dict[str, Any]]] = {}
+#: 模型 id -> 名称。list_hosts 要把「模型」塞进每个实例的 groups 里，
+#: 而模型名只有 list_host_groups 才拿得到，所以顺手缓存一份，省掉一次 RPC。
+_MODEL_NAMES: dict[int, str] = {}
+_MODEL_NAMES_AT: float = 0.0
 _CACHE_LOCK = threading.Lock()
+
+
+async def _model_name(adapter: AIOpsAdapter, model_id: int) -> str:
+    """取模型名（带进程内缓存）；缓存空时按需拉一次模型列表。
+
+    ``list_hosts`` 要给每个实例回填所属模型名，但模型名只在 ``model/base/list``
+    里 —— 前端通常先加载模型下拉，正常流程下缓存已热；这里兜住「直接打
+    hosts 接口」的情况（比如首屏、深链接、编辑回显）。
+    """
+    with _CACHE_LOCK:
+        hit = _MODEL_NAMES.get(model_id)
+    if hit:
+        return hit
+    await adapter.list_host_groups()
+    with _CACHE_LOCK:
+        return _MODEL_NAMES.get(model_id, f"模型 #{model_id}")
 
 
 def _register_key(key: str) -> int:
@@ -275,7 +295,12 @@ class AIOpsAdapter(DataSourceAdapter):
             "/monitor/model/base/list", offset=0, limit=PAGE_LIMIT
         )
         out: list[dict[str, Any]] = []
+        with _CACHE_LOCK:
+            _MODEL_NAMES.clear()
+            _MODEL_NAMES_AT = time.monotonic()
         for row in data.get("list") or []:
+            with _CACHE_LOCK:
+                _MODEL_NAMES[int(row["id"])] = str(row.get("name") or row["id"])
             if not row.get("monitor_switch"):
                 continue
             instance_num = int(row.get("instance_num") or 0)
@@ -323,7 +348,12 @@ class AIOpsAdapter(DataSourceAdapter):
                             or row["id"]
                         ),
                         "ip": str(show.get("ip") or ""),
-                        "groups": [{"group_id": mid}],
+                        # 必须带 name：api 层 _to_group_refs 直接取 r["name"]，
+                        # 缺了就是 KeyError -> 500（实测踩过）。
+                        # 名字从模型缓存取；缓存空时先补拉一次模型列表。
+                        "groups": [
+                            {"group_id": mid, "name": await _model_name(self, mid)}
+                        ],
                     }
                 )
         if q and _SEARCH_PARAM_OK is False:

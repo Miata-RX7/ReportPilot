@@ -312,6 +312,34 @@ class TestScopeEndpoints:
         assert "host_ids" in resp.text
 
     @respx.mock
+    async def test_hosts_tolerate_group_without_name(self, api) -> None:
+        """数据源返回的 groups 缺 name 时不能 500（回归：AIOps 曾因此整列表挂掉）。
+
+        表现是「实例加载失败 - 服务端错误」，而根因只是少一个展示用的名字。
+        """
+        client, _ = api
+        ds = await _create(client)
+        respx.post(ENDPOINT).mock(
+            return_value=_rpc(
+                [
+                    {
+                        "hostid": "14009",
+                        "name": "asw-01",
+                        "hostgroups": [{"groupid": "22"}],  # 没有 name
+                    }
+                ],
+                1,
+            )
+        )
+        resp = await client.get(f"/api/datasources/{ds['id']}/hosts?group_ids=22")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body[0]["name"] == "asw-01"
+        assert body[0]["groups"][0]["group_id"] == "22"
+        # 名字缺失时降级成空串，而不是整个请求 500
+        assert body[0]["groups"][0]["name"] == ""
+
+    @respx.mock
     async def test_items_params_and_shape(self, api) -> None:
         client, _ = api
         ds = await _create(client)
