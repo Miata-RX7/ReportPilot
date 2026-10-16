@@ -67,11 +67,22 @@ function emitScope(modelIds: string[], instanceIds: string[]) {
   emit('update:instanceIds', instanceIds)
 }
 
+/** 上次 emit 出去的 picks 签名。用于打断「emit -> prop 变化 -> watch 又跑」的死循环。 */
+let lastPublished = ''
+
 function publish() {
-  if (!selectedInstanceId.value) {
-    emit('update:picks', [])
-    return
-  }
+  const next = buildCurrentPicks()
+  const sig = next.map((p) => p.ref).join('|')
+  if (sig === lastPublished) return
+  lastPublished = sig
+  emit('update:picks', next)
+}
+
+function buildCurrentPicks(): AiopsPick[] {
+  if (!selectedInstanceId.value) return []
+  // 监控项还没加载出来时**不要**把已回填的 picks 清空：实例可能压根没有监控项，
+  // 此时 publish 会算出空数组，等于把编辑进来的配置抹掉。
+  if (!itemOptions.value.length) return props.picks
   const items = itemOptions.value
     .filter((i) => plainItemIds.value.includes(i.item_id) || listSelections.value[i.item_id])
     .map((i) => ({
@@ -80,10 +91,7 @@ function publish() {
       dataType: (i.aiops_data_type ?? 'number') as 'number' | 'text' | 'list',
       columns: i.aiops_columns,
     }))
-  emit(
-    'update:picks',
-    buildPicks(selectedInstanceId.value, items, listSelections.value),
-  )
+  return buildPicks(selectedInstanceId.value, items, listSelections.value)
 }
 
 /* ------------------------------------------------------------ 数据加载 */
@@ -175,6 +183,7 @@ function resetItems() {
   plainItemIds.value = []
   listSelections.value = {}
   rowOptions.value = []
+  lastPublished = '' // 换范围后签名要重新计，否则清空动作会被去重逻辑吞掉
   publish()
 }
 
@@ -228,9 +237,14 @@ function selectionOf(itemId: string): { columnId: string; rowKeys: string[] } {
 
 watch(
   () => props.datasourceId,
-  async (id) => {
-    resetItems()
-    emitScope([], [])
+  async (id, oldId) => {
+    // immediate 的那次执行 oldId 是 undefined，那是「挂载」而不是「换了数据源」。
+    // 挂载时不能清空父组件已回填的 scope —— 编辑弹窗是先填好 model_ids /
+    // instance_ids 再打开的，一清就等于把配置丢了。
+    if (oldId !== undefined) {
+      resetItems()
+      emitScope([], [])
+    }
     if (id !== null) {
       await loadModels()
     } else {
