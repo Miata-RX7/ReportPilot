@@ -143,8 +143,14 @@ async def _resolve_many(
 ) -> dict[int, QueryConfigResolved]:
     """批量把 query_config 里的 id 解析为名称。
 
-    按数据源聚合：每个数据源最多 3 次 RPC（hostgroup.get / host.get / item.get），
-    与指标条数无关。任一数据源失败时该数据源下全部降级为不解析。
+    按数据源聚合，与指标条数无关；任一数据源失败时该数据源下全部降级为不解析。
+
+    **范围与取数对象的解析统一委托 ``adapter.resolve_scoped_items``**：
+    Zabbix 的取数对象是纯数字 item_id，AIOps 的是四元组定位串
+    （``n:``/``l:`` 前缀，见 services/aiops_keys.py），两者的「存在性校验 +
+    名称回填」方式完全不同，写在这里分支会让本函数变成数据源方言的堆积处。
+    上级 / 下级字段名同样由 ``adapter.scope_kind`` 决定
+    （Zabbix 主机组+主机，AIOps 模型+实例）。
     """
     by_ds: dict[int, list[MetricDefinition]] = {}
     for m in metrics:
@@ -155,51 +161,86 @@ async def _resolve_many(
 
     out: dict[int, QueryConfigResolved] = {}
     for ds_id, group_metrics in by_ds.items():
-        union_groups: set[str] = set()
-        union_hosts: set[str] = set()
-        for m in group_metrics:
-            qc = m.query_config or {}
-            union_groups.update(str(g) for g in (qc.get("host_group_ids") or []))
-            union_hosts.update(str(h) for h in (qc.get("host_ids") or []))
-        if not union_groups or not union_hosts:
-            continue
         try:
             adapter, _ = await load_adapter_and_name(db, ds_id)
+            is_aiops = getattr(adapter, "scope_kind", "host") == "model_instance"
+            upper_key = "model_ids" if is_aiops else "host_group_ids"
+            lower_key = "instance_ids" if is_aiops else "host_ids"
+            upper_label = "模型" if is_aiops else "主机组"
+            lower_label = "实例" if is_aiops else "主机"
+
+            union_upper: set[str] = set()
+            union_lower: set[str] = set()
+            for m in group_metrics:
+                qc = m.query_config or {}
+                union_upper.update(str(x) for x in (qc.get(upper_key) or []))
+                union_lower.update(str(x) for x in (qc.get(lower_key) or []))
+            if not union_upper or not union_lower:
+                continue
+
             groups = await adapter.list_host_groups()
-            hosts = await adapter.list_hosts(sorted(union_groups))
-            items = await adapter.list_items(sorted(union_hosts))
+            gmap = {str(g["group_id"]): g["name"] for g in groups}
+
+            for m in group_metrics:
+                qc = m.query_config or {}
+                gids = [str(x) for x in (qc.get(upper_key) or [])]
+                hids = [str(x) for x in (qc.get(lower_key) or [])]
+                if not gids or not hids:
+                    continue
+
+                # 取数对象：scalar/pie/text 用 item_ids，curve 用 series
+                keys = [str(x) for x in (qc.get("item_ids") or [])]
+                for raw in qc.get("series") or []:
+                    if isinstance(raw, dict) and raw.get("item_id"):
+                        keys.append(str(raw["item_id"]))
+                keys = list(dict.fromkeys(keys))  # 去重且保序
+
+                items: list[ResolvedItem] = []
+                # 下级（主机/实例）名称：从 resolve_scoped_items 返回的 host 字段借，
+                # 省掉一次 list_hosts RPC；借不到时降级为「未知X (id: ...)」
+                hmap: dict[str, str] = {}
+                if keys:
+                    resolved = await adapter.resolve_scoped_items(
+                        upper_ids=gids, lower_ids=hids, keys=keys
+                    )
+                    by_key = dict(zip(keys, resolved, strict=False))
+                    for i in keys:
+                        got = by_key.get(i) or {}
+                        if got.get("host_id") and got.get("host"):
+                            hmap.setdefault(str(got["host_id"]), str(got["host"]))
+                        items.append(
+                            ResolvedItem(
+                                id=i,
+                                name=str(
+                                    got.get("name")
+                                    or f"未知取数对象 (id: {i[:40]})"
+                                ),
+                                host_id=str(got.get("host_id") or ""),
+                                host=str(got.get("host") or ""),
+                            )
+                        )
+
+                out[m.id] = QueryConfigResolved(
+                    host_groups=[
+                        ResolvedGroup(
+                            id=g, name=gmap.get(g, f"未知{upper_label} (id: {g})")
+                        )
+                        for g in gids
+                    ],
+                    hosts=[
+                        ResolvedHost(
+                            id=h,
+                            name=hmap.get(h) or f"未知{lower_label} (id: {h})",
+                        )
+                        for h in hids
+                    ],
+                    items=items,
+                )
         except Exception:
             logger.warning(
                 "数据源 %d 取数配置名称解析失败，降级为仅 id", ds_id, exc_info=True
             )
             continue
-        gmap = {str(g["group_id"]): g["name"] for g in groups}
-        hmap = {str(h["host_id"]): h["name"] for h in hosts}
-        imap = {str(i["item_id"]): i for i in items}
-        for m in group_metrics:
-            qc = m.query_config or {}
-            gids = [str(g) for g in (qc.get("host_group_ids") or [])]
-            hids = [str(h) for h in (qc.get("host_ids") or [])]
-            iids = [str(i) for i in (qc.get("item_ids") or [])]
-            out[m.id] = QueryConfigResolved(
-                host_groups=[
-                    ResolvedGroup(id=g, name=gmap.get(g, f"未知主机组 (id: {g})"))
-                    for g in gids
-                ],
-                hosts=[
-                    ResolvedHost(id=h, name=hmap.get(h, f"未知主机 (id: {h})"))
-                    for h in hids
-                ],
-                items=[
-                    ResolvedItem(
-                        id=i,
-                        name=imap[i]["name"] if i in imap else f"未知监控项 (id: {i})",
-                        host_id=str(imap[i]["host_id"]) if i in imap else "",
-                        host=imap[i].get("host", "") if i in imap else "",
-                    )
-                    for i in iids
-                ],
-            )
     return out
 
 
