@@ -138,6 +138,19 @@ def _tag_filter(stmt, db: AsyncSession, tag: str, idx: int = 0):
     )
 
 
+def _resolved_item(key: str, got: dict[str, Any]) -> ResolvedItem:
+    """单个取数对象-> ResolvedItem。
+
+    AIOps 的取数对象是定位串（可能较长），未知时截断到 40 字符，避免列表页被刷屏。
+    """
+    return ResolvedItem(
+        id=key,
+        name=str(got.get("name") or f"未知取数对象 (id: {key[:40]})"),
+        host_id=str(got.get("host_id") or ""),
+        host=str(got.get("host") or ""),
+    )
+
+
 async def _resolve_many(
     db: AsyncSession, metrics: list[MetricDefinition]
 ) -> dict[int, QueryConfigResolved]:
@@ -181,45 +194,56 @@ async def _resolve_many(
             groups = await adapter.list_host_groups()
             gmap = {str(g["group_id"]): g["name"] for g in groups}
 
+# 按「下级集合」分桶：同一批主机/实例的指标合并成**一次** resolve_scoped_items。
+            # 若放在「每个指标一次」里，N 个指标就是 N×(list_hosts + list_items) 次 RPC，
+            # 列表页会明显变慢（曾实测 4.4kB 响应要2.7 秒）。
+            # 上级取桶内所有指标的并集：这里只做名称回填、不承担配置校验
+            # （真正的取数校验在 calc_engine 里），放宽一格换取 RPC 数与指标数无关。
+            buckets: dict[tuple[str, ...], dict[str, list[str]]] = {}
+            per_metric: dict[int, tuple[list[str], list[str], list[str]]] = {}
             for m in group_metrics:
                 qc = m.query_config or {}
                 gids = [str(x) for x in (qc.get(upper_key) or [])]
                 hids = [str(x) for x in (qc.get(lower_key) or [])]
                 if not gids or not hids:
                     continue
-
                 # 取数对象：scalar/pie/text 用 item_ids，curve 用 series
                 keys = [str(x) for x in (qc.get("item_ids") or [])]
                 for raw in qc.get("series") or []:
                     if isinstance(raw, dict) and raw.get("item_id"):
                         keys.append(str(raw["item_id"]))
                 keys = list(dict.fromkeys(keys))  # 去重且保序
+                per_metric[m.id] = (gids, hids, keys)
+                if not keys:
+                    continue
+                slot = buckets.setdefault(tuple(hids), {"upper": [], "keys": []})
+                for g in gids:
+                    if g not in slot["upper"]:
+                        slot["upper"].append(g)
+                for k in keys:
+                    if k not in slot["keys"]:
+                        slot["keys"].append(k)
 
-                items: list[ResolvedItem] = []
-                # 下级（主机/实例）名称：从 resolve_scoped_items 返回的 host 字段借，
-                # 省掉一次 list_hosts RPC；借不到时降级为「未知X (id: ...)」
-                hmap: dict[str, str] = {}
-                if keys:
-                    resolved = await adapter.resolve_scoped_items(
-                        upper_ids=gids, lower_ids=hids, keys=keys
-                    )
-                    by_key = dict(zip(keys, resolved, strict=False))
-                    for i in keys:
-                        got = by_key.get(i) or {}
-                        if got.get("host_id") and got.get("host"):
-                            hmap.setdefault(str(got["host_id"]), str(got["host"]))
-                        items.append(
-                            ResolvedItem(
-                                id=i,
-                                name=str(
-                                    got.get("name")
-                                    or f"未知取数对象 (id: {i[:40]})"
-                                ),
-                                host_id=str(got.get("host_id") or ""),
-                                host=str(got.get("host") or ""),
-                            )
-                        )
+            # 定位串 -> 已解析元信息；host_id -> 下级名称（供 hosts 回显）
+            resolved_map: dict[str, dict[str, Any]] = {}
+            hmap: dict[str, str] = {}
+            for hids, slot in buckets.items():
+                resolved = await adapter.resolve_scoped_items(
+                    upper_ids=slot["upper"],
+                    lower_ids=list(hids),
+                    keys=slot["keys"],
+                )
+                for key, got in zip(slot["keys"], resolved, strict=False):
+                    got = got or {}
+                    resolved_map[key] = got
+                    if got.get("host_id") and got.get("host"):
+                        hmap.setdefault(str(got["host_id"]), str(got["host"]))
 
+            for m in group_metrics:
+                found = per_metric.get(m.id)
+                if found is None:
+                    continue
+                gids, hids, keys = found
                 out[m.id] = QueryConfigResolved(
                     host_groups=[
                         ResolvedGroup(
@@ -234,7 +258,7 @@ async def _resolve_many(
                         )
                         for h in hids
                     ],
-                    items=items,
+                    items=[_resolved_item(i, resolved_map.get(i) or {}) for i in keys],
                 )
         except Exception:
             logger.warning(

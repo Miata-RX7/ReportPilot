@@ -187,6 +187,11 @@ function onFileChange(file: UploadFile, files: UploadFiles) {
 }
 
 async function doUpload() {
+  // 第二次点击 = 「完成并关闭」：此时已上传过，只需要收尾
+  if (uploadResult.value) {
+    uploadVisible.value = false
+    return
+  }
   if (!uploadName.value.trim()) {
     ElMessage.warning('请输入模板名称')
     return
@@ -437,6 +442,19 @@ onMounted(load)
       :submitting="uploadSubmitting"
       @submit="doUpload"
     >
+      <template #footer>
+        <!--
+          上传成功后保留弹窗是为了展示「已解析变量」（占位符扫描结果是用户唯一能核对的反馈），
+          所以此时主按钮必须变成「完成并关闭」，否则用户只能按X/ESC 出去，
+          看起来就像「点了确定但没反应」。
+        -->
+        <el-button :disabled="uploadSubmitting" @click="uploadVisible = false">
+          {{ uploadResult ? '关闭' : '取消' }}
+        </el-button>
+        <el-button type="primary" :loading="uploadSubmitting" @click="doUpload">
+          {{ uploadResult ? '完成并关闭' : '确定' }}
+        </el-button>
+      </template>
       <el-form label-width="80px" @submit.prevent>
         <el-form-item label="名称" required>
           <el-input v-model="uploadName" placeholder="如 运维月报模板" />
