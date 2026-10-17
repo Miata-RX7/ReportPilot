@@ -311,16 +311,17 @@ watch(
 watch(
   () => props.picks,
   async (picks) => {
+    // 即使没有已选取数对象，也要先把实例/监控项拉起来 ——
+    // 否则编辑时 el-select 找不到对应option，只能把原始 id 当标签显示。
+    const modelId = props.modelIds[0]
+    if (modelId && !instances.value.length) await loadInstances(modelId)
+    const instId = props.instanceIds[0]
+    if (instId && !itemOptions.value.length) await loadItems(instId)
     if (!picks.length) return
     const refs = picks.map((p) => p.ref)
     const restored = picksToSelections(refs, () => '')
     plainItemIds.value = restored.plainItemIds
     listSelections.value = restored.listSelections
-    // 回显时补齐尚未加载的下游数据
-    const modelId = props.modelIds[0]
-    if (modelId && !instances.value.length) await loadInstances(modelId)
-    const instId = props.instanceIds[0]
-    if (instId && !itemOptions.value.length) await loadItems(instId)
     // 命中 list 项的列需要把主键行拉出来，否则回显只有列、没有行
     for (const [itemId, sel] of Object.entries(restored.listSelections)) {
       if (sel.columnId && sel.rowKeys.length) await loadRows(itemId, sel.columnId)

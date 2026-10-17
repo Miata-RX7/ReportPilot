@@ -497,7 +497,27 @@ async function openEdit(row: MetricDefinitionRead) {
   // 而它的 immediate watcher 又会把这些值清掉 —— 编辑一个AIOps 指标会丢配置。
   form.model_ids = [...(row.query_config.model_ids ?? [])]
   form.instance_ids = [...(row.query_config.instance_ids ?? [])]
-  aiopsPicks.value = buildPicksFromRefs(row.query_config.item_ids ?? [])
+  // **两条路径都要读**：scalar/pie/text 的取数对象在 item_ids，
+  // curve 的在 series[].item_id（它的 item_ids 是空的）。只读一条的话，
+  // 编辑曲线指标时 picks 为空 -> 回显 watcher 直接 return -> 实例列表不加载 ->
+  // el-select 只能把原始 id 当标签显示。
+  const aiopsRefs = [
+    ...(row.query_config.item_ids ?? []),
+    ...(row.query_config.series ?? [])
+      .map((s) => (s as { item_id?: string }).item_id)
+      .filter((x): x is string => typeof x === 'string' && x !== ''),
+  ]
+  aiopsPicks.value = buildPicksFromRefs(aiopsRefs)
+  // 曲线的取数对象与展示名/数值变换都存在 series 里，一并回填
+  form.series = (row.query_config.series ?? []).map((s) => {
+    const one = s as { item_id?: string; display_name?: string; transform?: { mul?: number; add?: number } }
+    return {
+      item_id: one.item_id ?? '',
+      display_name: one.display_name ?? '',
+      mul: one.transform?.mul ?? 1,
+      add: one.transform?.add ?? 0,
+    }
+  })
 
   // 时间类型不取数：回填时间配置即可，不需要拉取主机组/主机/监控项
   if (form.metric_type === 'time') {
