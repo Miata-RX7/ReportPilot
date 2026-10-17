@@ -149,7 +149,9 @@ async function loadItems(instanceId: string) {
   loadingItems.value = true
   try {
     const { data } = await dataSourceApi.listItems(props.datasourceId, [instanceId])
-    itemOptions.value = data
+    // 在入口统一过滤 log_* 并排序：下游所有取数路径（级联、文本下拉）都受益，
+    // 不会出现「级联里没有、文本下拉里却有」的割裂
+    itemOptions.value = sortItems(data.filter((i) => !isHiddenItem(i)))
     if (!data.length) loadError.value = '该实例没有任何监控项，请换一个实例'
     else if (loadError.value.startsWith('该实例')) loadError.value = ''
   } catch {
@@ -282,9 +284,30 @@ const candidates = computed<AiopsPick[]>(() => {
 
 /* ------------------------------------------------- 曲线配置的三级级联数据 */
 
+/**
+ * 需要隐藏的监控项：``log_`` 开头。
+ *
+ * 这是 syslog 计数（log_warning / log_err / log_emerg …），数值本身是累计条数，
+ * 当指标用既没业务含义又会误导（今天比昨天大只说明多收了几条日志）。
+ * 用户 2026-10-17 要求直接屏蔽。
+ */
+function isHiddenItem(item: ItemRef): boolean {
+  return /^log_/i.test(item.name ?? '') || /^log_/i.test(item.key ?? '')
+}
+
+/** 排序：数值在上、表格在下，各自按名称排（用户 2026-10-17 要求）。 */
+function sortItems(items: ItemRef[]): ItemRef[] {
+  return [...items].sort((a, b) => {
+    const aTable = a.aiops_data_type === 'list' ? 1 : 0
+    const bTable = b.aiops_data_type === 'list' ? 1 : 0
+    if (aTable !== bTable) return aTable - bTable
+    return (a.name ?? '').localeCompare(b.name ?? '', 'zh-Hans-CN')
+  })
+}
+
 /** 第 1 级：监控项（数值 / 表格，标注类型）。文本类不出现 —— 它只能做文本指标。 */
 function cascaderItems(): CascaderNode[] {
-  return itemOptions.value
+  return sortItems(itemOptions.value)
     .filter((i) => i.aiops_data_type !== 'text')
     .map((i) => ({
       value: i.item_id,
@@ -461,8 +484,8 @@ defineExpose({ plainItemAllowed, cascaderItems, cascaderColumns, cascaderRows })
       </el-select>
     </el-form-item>
 
-    <!-- 曲线类型：取数对象交给下方「曲线配置」逐条选，这里不重复展示 -->
-    <template v-if="metricType !== 'curve'">
+    <!-- 数值 / 曲线：取数对象都用三级级联，由父组件渲染（用户 2026-10-17 要求一致） -->
+    <template v-if="metricType === 'text'">
     <el-form-item label="监控项">
       <div v-loading="loadingItems" class="picker-block">
         <el-alert
@@ -598,7 +621,7 @@ defineExpose({ plainItemAllowed, cascaderItems, cascaderColumns, cascaderRows })
     </el-form-item>
     </template>
     <div v-else class="form-hint curve-hint">
-      曲线图请在下方「曲线配置」里逐条添加并选择监控项
+      {{ metricType === 'curve' ? '曲线图' : '数值' }}类型请在下方用三级级联选择「监控项 / 列 / 行」
     </div>
   </div>
 </template>

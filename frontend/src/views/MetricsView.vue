@@ -227,9 +227,12 @@ watch(dsId, () => {
  * 真正落库的取数对象 id 列表。
  * AIOps 存定位串（n:/l: 前缀），Zabbix 存纯数字 item_id —— 两者不可混用。
  */
-const effectiveItemIds = computed(() =>
-  isAiopsDs.value ? aiopsPicks.value.map((p) => p.ref) : [...form.item_ids],
-)
+const effectiveItemIds = computed(() => {
+  if (!isAiopsDs.value) return [...form.item_ids]
+  // 数值用级联行（可多项聚合），文本用组件里的下拉
+  if (form.metric_type === 'scalar') return [...aiopsScalarItemIds.value]
+  return aiopsPicks.value.map((p) => p.ref)
+})
 
 /**
  * 曲线列表。两种数据源都走form.series（由「曲线配置」写入），
@@ -513,6 +516,8 @@ async function openEdit(row: MetricDefinitionRead) {
       .filter((x): x is string => typeof x === 'string' && x !== ''),
   ]
   aiopsPicks.value = buildPicksFromRefs(aiopsRefs)
+  // 数值型的取数对象存在级联行里（scalar 的 item_ids 是多项）
+  aiopsScalarRefs.value = [...(row.query_config.item_ids ?? [])]
   // 曲线的取数对象与展示名/数值变换都存在 series 里，一并回填
   form.series = (row.query_config.series ?? []).map((s) => {
     const one = s as { item_id?: string; display_name?: string; transform?: { mul?: number; add?: number } }
@@ -851,6 +856,45 @@ function seriesRowCascaderValue(row: { item_id: string }): string[] {
   if (ref.columnId === null || ref.rowKey === null) return [String(ref.itemId)]
   return [String(ref.itemId), String(ref.columnId), ref.rowKey]
 }
+
+/* ---------------------------------------------------------- 数值型的级联行 */
+
+/**
+ * 数值指标的取数对象（AIOps 下同样用三级级联，与曲线保持一致）。
+ * scalar 允许多项聚合，所以是「可增删的行」，每行一个级联。
+ */
+const aiopsScalarRefs = ref<string[]>([])
+
+function addAiopsScalarRow(): void {
+  aiopsScalarRefs.value = [...aiopsScalarRefs.value, '']
+}
+
+function removeAiopsScalarRow(idx: number): void {
+  aiopsScalarRefs.value = aiopsScalarRefs.value.filter((_, i) => i !== idx)
+}
+
+function aiopsScalarValue(ref: string): string[] {
+  return seriesRowCascaderValue({ item_id: ref })
+}
+
+function onAiopsScalarChange(idx: number, path: unknown, labels: unknown): void {
+  const inst = form.instance_ids[0] ?? ''
+  const picked = Array.isArray(path) ? (path as string[]) : []
+  const names = Array.isArray(labels) ? (labels as string[]) : []
+  const itemId = picked[0]
+  const ref = itemId ? encodeRef(inst, itemId, picked[1], picked[2]) : ''
+  if (ref) {
+    const next = [...aiopsScalarRefs.value]
+    next[idx] = ref
+    aiopsScalarRefs.value = next
+  } else {
+    removeAiopsScalarRow(idx)
+  }
+  void names
+}
+
+/** 落库用的数值取数对象（去掉空行） */
+const aiopsScalarItemIds = computed(() => aiopsScalarRefs.value.filter(Boolean))
 
 function onSeriesItemChange(row: { item_id: string; display_name: string }) {
   // 选中 item 时用 item 名称预填 display_name（用户可再改）
@@ -1652,7 +1696,50 @@ onMounted(load)
         />
 
         <!-- Zabbix：原有三级联（路径与升级前完全一致） -->
-        <template v-else>
+        <!-- 数值型（AIOps）：与曲线一致的三级级联，可增删多项做聚合 -->
+        <div v-if="isAiopsDs && form.metric_type === 'scalar'" class="aiops-scalar">
+          <div class="form-section">取数配置</div>
+          <el-form-item label="监控项" required>
+            <div class="aiops-scalar__rows">
+              <div v-for="(ref, idx) in aiopsScalarRefs" :key="idx" class="series-row">
+                <el-cascader
+                  :model-value="aiopsScalarValue(ref)"
+                  :options="aiopsCascaderOptions"
+                  :props="aiopsCascaderProps"
+                  class="series-item"
+                  placeholder="监控项 / 列 / 行"
+                  clearable
+                  filterable
+                  data-testid="scalar-cascader"
+                  @visible-change="(v: boolean) => { if (v) void prefetchAiopsRows() }"
+                  @change="(v: unknown, labels: unknown) => onAiopsScalarChange(idx, v, labels)"
+                >
+                  <template #default="{ data }">
+                    <span class="opt-name">{{ data.label }}</span>
+                    <el-tag v-if="data.tag" size="small" effect="plain" type="info">
+                      {{ data.tag }}
+                    </el-tag>
+                    <span v-if="data.hint" class="opt-meta">{{ data.hint }}</span>
+                  </template>
+                </el-cascader>
+                <el-button link type="danger" @click="removeAiopsScalarRow(idx)">删除</el-button>
+              </div>
+              <el-button
+                :disabled="form.instance_ids.length === 0"
+                data-testid="scalar-add"
+                @click="addAiopsScalarRow"
+              >
+                + 添加监控项
+              </el-button>
+              <div v-if="!aiopsScalarRefs.length" class="form-hint">
+                请至少添加一个监控项（可添加多项，再用下方「聚合方式」合并）
+              </div>
+            </div>
+          </el-form-item>
+        </div>
+
+        <!-- Zabbix：原有三级联（路径与升级前完全一致） -->
+        <template v-else-if="!isAiopsDs">
         <el-form-item label="主机组" prop="host_group_ids">
           <el-select
             v-model="form.host_group_ids"
@@ -2344,6 +2431,15 @@ onMounted(load)
 
 .series-item {
   width: 220px;
+}
+.aiops-scalar__rows {
+  width: 100%;
+}
+.aiops-scalar__rows .series-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
 }
 .opt-name {
   margin-right: var(--space-2);
