@@ -186,6 +186,27 @@ const isAiopsDs = computed(() => dsType.value === 'aiops')
 /** AIOps 级联选出的取数对象（存的是定位串） */
 const aiopsPicks = ref<AiopsPick[]>([])
 
+/**
+ * AIOps 当前实例下所有可选取数对象 —— 曲线的「曲线配置」下拉用它。
+ * （与 Zabbix 的 itemOptions 同一位置，故下面把 itemOptions 指向它）
+ */
+const aiopsCandidates = ref<AiopsPick[]>([])
+
+/** 曲线配置的下拉选项：AIOps 用候选（定位串），Zabbix 用监控项列表 */
+const seriesOptionSource = computed<ItemRef[]>(() =>
+  isAiopsDs.value
+    ? aiopsCandidates.value.map((p) => ({
+        item_id: p.ref,
+        name: p.label,
+        key: '',
+        host_id: form.instance_ids[0] ?? '',
+        host: '',
+        value_type: 0,
+        units: p.column?.unit ?? '',
+      }))
+    : itemOptions.value,
+)
+
 /** AIOps 下模型/实例由独立组件维护；切数据源时必须清干净 */
 watch(dsId, () => {
   form.model_ids = []
@@ -197,21 +218,19 @@ watch(dsId, () => {
  * 真正落库的取数对象 id 列表。
  * AIOps 存定位串（n:/l: 前缀），Zabbix 存纯数字 item_id —— 两者不可混用。
  */
+/**
+ * 真正落库的取数对象 id 列表。
+ * AIOps 存定位串（n:/l: 前缀），Zabbix 存纯数字 item_id —— 两者不可混用。
+ */
 const effectiveItemIds = computed(() =>
   isAiopsDs.value ? aiopsPicks.value.map((p) => p.ref) : [...form.item_ids],
 )
 
-/** AIOps 的曲线直接由picks 派生（每行一个取数对象 = 一条曲线）。 */
-const effectiveSeries = computed(() =>
-  isAiopsDs.value
-    ? aiopsPicks.value.map((p) => ({
-        item_id: p.ref,
-        display_name: p.label,
-        mul: 1,
-        add: 0,
-      }))
-    : form.series,
-)
+/**
+ * 曲线列表。两种数据源都走form.series（由「曲线配置」写入），
+ * 只是 AIOps 的下拉选项来自AiopsScopePicker 抛出的候选。
+ */
+const effectiveSeries = computed(() => form.series)
 
 /** AIOps 不支持饼图（无 Zabbix 那样的 UP/DOWN 值域语义），选到就落回 scalar */
 watch(
@@ -1480,9 +1499,11 @@ onMounted(load)
           :model-ids="form.model_ids"
           :instance-ids="form.instance_ids"
           :picks="aiopsPicks"
+          :metric-type="form.metric_type"
           @update:model-ids="form.model_ids = $event"
           @update:instance-ids="form.instance_ids = $event"
           @update:picks="aiopsPicks = $event"
+          @update:candidates="aiopsCandidates = $event"
           @scope-change="onAiopsScopeChange"
         />
 
@@ -1586,7 +1607,13 @@ onMounted(load)
 
         <!-- curve：每条曲线独立指定 item / 展示名 / 数值变换 -->
 
-        <template v-if="form.metric_type === 'curve' && !isAiopsDs">
+        <template v-if="form.metric_type === 'curve'">
+          <div
+            v-if="isAiopsDs && !aiopsCandidates.length && form.instance_ids.length"
+            class="form-hint"
+          >
+            该实例暂无可选监控项 —— 若要取表格类数据，请先在上方「监控项」里选列与主键行
+          </div>
           <div class="form-section">曲线配置</div>
           <div
             v-for="(row, idx) in form.series"
@@ -1606,7 +1633,7 @@ onMounted(load)
               @change="onSeriesItemChange(row)"
             >
               <el-option
-                v-for="it in itemOptions"
+                v-for="it in seriesOptionSource"
                 :key="it.item_id"
                 :label="itemLabel(it)"
                 :value="it.item_id"

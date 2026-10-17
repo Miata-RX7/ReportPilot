@@ -18,7 +18,7 @@ import type { HostGroupRef, HostRef, ItemRef, ItemRowRef } from '@/api/types'
 import {
   type AiopsColumn,
   type AiopsPick,
-  allowedMetricTypes,
+  type MetricType,
   buildPicks,
   columnLabel,
   picksToSelections,
@@ -32,6 +32,13 @@ const props = defineProps<{
   instanceIds: string[]
   /** 已选取数对象（存的是定位串） */
   picks: AiopsPick[]
+  /**
+   * 当前指标类型。决定监控项区展示什么：
+   * - scalar / pie：下拉多选（数值项 + 已展开的列表列/行）
+   * - text：下拉多选（文本项 + 列表的 text 列）
+   * - curve：**不展示**取数对象选择，改为把候选交给父组件的「曲线配置」
+   */
+  metricType: MetricType
 }>()
 
 const emit = defineEmits<{
@@ -40,6 +47,8 @@ const emit = defineEmits<{
   'update:picks': [value: AiopsPick[]]
   /** 范围（模型/实例）变化 —— 父级据此清空已选取数对象 */
   'scope-change': []
+  /** 当前实例下所有可选的取数对象（曲线的「曲线配置」用它渲染下拉） */
+  'update:candidates': [value: AiopsPick[]]
 }>()
 
 const modelOptions = ref<HostGroupRef[]>([])
@@ -220,6 +229,45 @@ function onListItemUncheck(itemId: string) {
 
 const listItems = computed(() => itemOptions.value.filter((i) => i.aiops_data_type === 'list'))
 
+/**
+ * 简单监控项（number / text）在当前指标类型下是否允许出现在下拉里。
+ *
+ * 依据 utils/aiopsRef.ts 的判定表：text 型监控项只能做文本指标，
+ * 所以**数值 / 曲线 / 饼图指标里不出现**（用户 2026-10-17 明确要求）。
+ */
+function plainItemAllowed(item: ItemRef): boolean {
+  return props.metricType === 'text' ? item.aiops_data_type === 'text' : item.aiops_data_type === 'number'
+}
+
+/** 下拉里可勾的简单监控项 */
+const plainItems = computed(() => itemOptions.value.filter(plainItemAllowed))
+
+/**
+ * 当前实例下所有可选取数对象（父组件的曲线配置拿它渲染下拉）。
+ *
+ * = 简单监控项（按类型过滤） + **已展开**的列表列/行组合。
+ * 列表项必须先在下面选列与行才会进来：一个端口表有 26 行 × 14 列，
+ * 全量拉回来既慢又没必要（实测 rows 要逐列单独请求）。
+ */
+const candidates = computed<AiopsPick[]>(() => {
+  const inst = selectedInstanceId.value
+  if (!inst) return []
+  return buildPicks(
+    inst,
+    itemOptions.value
+      .filter((i) => plainItemAllowed(i) || listSelections.value[i.item_id])
+      .map((i) => ({
+        id: i.item_id,
+        name: i.name,
+        dataType: (i.aiops_data_type ?? 'number') as 'number' | 'text' | 'list',
+        columns: i.aiops_columns,
+      })),
+    listSelections.value,
+  )
+})
+
+watch(candidates, (v) => emit('update:candidates', v), { immediate: true, deep: true })
+
 function columnsOf(item: ItemRef): AiopsColumn[] {
   return item.aiops_columns ?? []
 }
@@ -284,7 +332,7 @@ watch(
   { deep: true, immediate: true },
 )
 
-defineExpose({ allowedFor: allowedMetricTypes })
+defineExpose({ plainItemAllowed })
 </script>
 
 <template>
@@ -326,7 +374,7 @@ defineExpose({ allowedFor: allowedMetricTypes })
 
     <el-form-item label="实例" required>
       <el-select
-        :model-value="instanceIds"
+        :model-value="selectedInstanceId"
         :loading="loadingInstances"
         :disabled="modelIds.length === 0"
         class="full-width"
@@ -349,6 +397,8 @@ defineExpose({ allowedFor: allowedMetricTypes })
       </el-select>
     </el-form-item>
 
+    <!-- 曲线类型：取数对象交给下方「曲线配置」逐条选，这里不重复展示 -->
+    <template v-if="metricType !== 'curve'">
     <el-form-item label="监控项">
       <div v-loading="loadingItems" class="picker-block">
         <el-alert
@@ -363,27 +413,49 @@ defineExpose({ allowedFor: allowedMetricTypes })
           :image-size="60"
         />
         <template v-else>
-          <!-- 非 list：直接勾选 -->
-          <el-checkbox-group
+          <!-- 简单监控项：下拉多选（已按指标类型过滤，数值指标里不出现文本项） -->
+          <el-select
+            v-if="plainItems.length"
             :model-value="plainItemIds"
-            class="item-group"
+            multiple
+            filterable
+            collapse-tags
+            collapse-tags-tooltip
+            class="full-width"
+            :placeholder="metricType === 'text' ? '选择文本类监控项' : '选择数值类监控项'"
+            data-testid="aiops-select-items"
             @update:model-value="onPlainItemsChange"
           >
-            <el-checkbox
-              v-for="it in itemOptions.filter((i) => i.aiops_data_type !== 'list')"
+            <el-option
+              v-for="it in plainItems"
               :key="it.item_id"
+              :label="it.name"
               :value="it.item_id"
-              class="item-check"
             >
-              {{ it.name }}
-              <el-tag size="small" effect="plain" :type="it.aiops_data_type === 'number' ? 'primary' : 'info'">
+              <span class="opt-name">{{ it.name }}</span>
+              <el-tag
+                size="small"
+                effect="plain"
+                :type="it.aiops_data_type === 'number' ? 'primary' : 'info'"
+              >
                 {{ it.aiops_data_type === 'number' ? '数值' : '文本' }}
               </el-tag>
               <span v-if="it.aiops_cycle" class="opt-meta">{{ it.aiops_cycle }}s</span>
-            </el-checkbox>
-          </el-checkbox-group>
+            </el-option>
+          </el-select>
+          <div v-else-if="!listItems.length" class="form-hint">
+            {{
+              metricType === 'text'
+                ? '该实例没有文本类监控项'
+                : '该实例没有数值类监控项（文本类请切到「文本」指标类型）'
+            }}
+          </div>
 
-          <!-- list：勾选后展开「列 → 主键行」 -->
+          <!-- list型：先选列与主键行，产出的组合会进入上面的下拉候选 -->
+          <div v-if="listItems.length" class="list-source">
+            <div class="list-source__title">
+              表格类监控项（需先选列与行，再在上方下拉里勾选）
+            </div>
           <div v-for="it in listItems" :key="it.item_id" class="list-item">
             <el-checkbox
               :model-value="!!listSelections[it.item_id]"
@@ -456,9 +528,14 @@ defineExpose({ allowedFor: allowedMetricTypes })
               </el-form-item>
             </div>
           </div>
+          </div>
         </template>
       </div>
     </el-form-item>
+    </template>
+    <div v-else class="form-hint curve-hint">
+      曲线图请在下方「曲线配置」里逐条添加并选择监控项
+    </div>
   </div>
 </template>
 
@@ -481,9 +558,22 @@ defineExpose({ allowedFor: allowedMetricTypes })
 .item-check {
   margin-right: 0;
 }
-.list-item {
+.list-source {
   margin-top: var(--space-3);
   padding-top: var(--space-3);
+  border-top: 1px solid var(--color-border);
+}
+.list-source__title {
+  margin-bottom: var(--space-2);
+  color: var(--color-text-secondary);
+  font-size: var(--font-xs);
+}
+.curve-hint {
+  margin-top: var(--space-2);
+}
+.list-item {
+  margin-top: var(--space-2);
+  padding-top: var(--space-2);
   border-top: 1px dashed var(--color-border);
 }
 .list-expanded {
