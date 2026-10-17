@@ -24,6 +24,19 @@ import {
   picksToSelections,
 } from '@/utils/aiopsRef'
 
+/** 曲线配置的三级级联节点（el-cascader lazy 的数据结构）。 */
+interface CascaderNode {
+  value: string
+  raw: string
+  label: string
+  /** 第 1 级用来标注「数值 / 表格」 */
+  tag?: string
+  /** 第 3 级行对应的当前值，右侧灰字展示 */
+  hint?: string
+  /** 表格项不可直接选中，必须往下选列与行 */
+  selectable?: boolean
+}
+
 const props = defineProps<{
   datasourceId: number | null
   /** 已选模型（= 主机组语义） */
@@ -264,54 +277,58 @@ const candidates = computed<AiopsPick[]>(() => {
       })),
     listSelections.value,
   )
-  if (props.metricType !== 'curve') return base
-
-  // 曲线模式：把「表格的数值列」也作为候选项暴露出去（用户选方案 A：
-  // 选中一列后展开成「每个有数据的行一条曲线」）。
-  // 这里用合成 ref col:<itemId>:<columnId>，父组件识别到后调 expandColumn()。
-  const colCandidates: AiopsPick[] = []
-  for (const it of listItems.value) {
-    for (const c of columnsOf(it)) {
-      if (c.value_type !== 'number' || !c.has_history) continue
-      colCandidates.push({
-        ref: `col:${it.item_id}:${c.column_id}`,
-        label: `${it.name} / ${columnLabel(c)} — 展开为每行一条曲线`,
-        itemId: it.item_id,
-        itemName: it.name,
-        column: c,
-        rowKey: null,
-      })
-    }
-  }
-  return [...base, ...colCandidates]
+  return base
 })
 
-/**
- * 把「表格的某一列」展开成「每个有数据的行一条曲线」（用户 2026-10-17 选的方案 A）。
- *
- * 只认数值列且必须有历史 —— 无历史的列画出来必然是空图。
- * 行由后端按「该列当前值非空」过滤过（实测当前值非空⟺有历史），
- * 所以这里拿到的每一行都真的能画出曲线。
- */
-async function expandColumn(itemId: string, columnId: string): Promise<AiopsPick[]> {
+/* ------------------------------------------------- 曲线配置的三级级联数据 */
+
+/** 第 1 级：监控项（数值 / 表格，标注类型）。文本类不出现 —— 它只能做文本指标。 */
+function cascaderItems(): CascaderNode[] {
+  return itemOptions.value
+    .filter((i) => i.aiops_data_type !== 'text')
+    .map((i) => ({
+      value: i.item_id,
+      raw: i.item_id,
+      label: i.name,
+      tag: i.aiops_data_type === 'list' ? '表格' : '数值',
+      // 表格项必须继续往下选列与行；数值项本身就是取数对象，可直接选中
+      selectable: i.aiops_data_type !== 'list',
+    }))
+}
+
+/** 第 2 级：非主键列中「数值类型且有历史」的列（用户 2026-10-17 明确要求）。 */
+function cascaderColumns(itemId: string): CascaderNode[] {
+  const it = itemOptions.value.find((i) => i.item_id === itemId)
+  return (it?.aiops_columns ?? [])
+    .filter((c) => !c.is_primary && c.value_type === 'number' && c.has_history)
+    .map((c) => ({
+      value: String(c.column_id),
+      raw: String(c.column_id),
+      label: columnLabel(c),
+    }))
+}
+
+/** 第 3 级：主键列每一行的具体值（后端已按「当前值非空即有历史」过滤）。 */
+async function cascaderRows(itemId: string, columnId: string): Promise<CascaderNode[]> {
   const inst = selectedInstanceId.value
   if (!inst || props.datasourceId === null) return []
-  const it = itemOptions.value.find((i) => i.item_id === itemId)
-  const column = it ? columnById(it, columnId) : null
-  if (!it || !column || column.value_type !== 'number' || !column.has_history) return []
   try {
-    const { data } = await dataSourceApi.listItemRows(props.datasourceId, inst, itemId, columnId)
-    if (!data.length) return []
-    return buildPicks(
+    const { data } = await dataSourceApi.listItemRows(
+      props.datasourceId,
       inst,
-      [{ id: itemId, name: it.name, dataType: 'list', columns: it.aiops_columns }],
-      { [itemId]: { columnId, rowKeys: data.map((r) => r.row_key) } },
+      itemId,
+      columnId,
     )
+    return data.map((r) => ({
+      value: r.row_key,
+      raw: r.row_key,
+      label: r.row_key,
+      hint: r.current_value,
+    }))
   } catch {
     return []
   }
 }
-
 watch(candidates, (v) => emit('update:candidates', v), { immediate: true, deep: true })
 
 function columnsOf(item: ItemRef): AiopsColumn[] {
@@ -379,7 +396,7 @@ watch(
   { deep: true, immediate: true },
 )
 
-defineExpose({ plainItemAllowed, expandColumn })
+defineExpose({ plainItemAllowed, cascaderItems, cascaderColumns, cascaderRows })
 </script>
 
 <template>

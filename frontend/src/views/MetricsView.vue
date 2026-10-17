@@ -41,7 +41,7 @@ import {
 import type { TimeQuickOffset } from '@/api/types'
 import { useAuthStore } from '@/stores/auth'
 import { parseApiError } from '@/utils/error'
-import { type AiopsPick, buildPicksFromRefs } from '@/utils/aiopsRef'
+import { type AiopsPick, buildPicksFromRefs, decodeRef, encodeRef } from '@/utils/aiopsRef'
 import {
   changePctClass,
   factDisplayNumber,
@@ -192,8 +192,15 @@ const aiopsPicks = ref<AiopsPick[]>([])
  */
 const aiopsCandidates = ref<AiopsPick[]>([])
 
-/** AIOps 级联组件实例：曲线展开某一列时要调它的 expandColumn() */
+/** AIOps 级联组件实例：曲线的三级级联要从它那里逐级取数据 */
 const aiopsPickerRef = ref<InstanceType<typeof AiopsScopePicker> | null>(null)
+
+/** el-cascader lazy 的节点/上下文（只用到本文件关心的字段） */
+interface CascaderCtx {
+  level: number
+  value: unknown
+  data?: { raw?: string }
+}
 
 /** 曲线配置的下拉选项：AIOps 用候选（定位串），Zabbix 用监控项列表 */
 const seriesOptionSource = computed<ItemRef[]>(() =>
@@ -734,37 +741,71 @@ function removeSeriesRow(idx: number) {
   form.series.splice(idx, 1)
 }
 
-async function onSeriesItemChange(row: { item_id: string; display_name: string }) {
-  const key = row.item_id
+/**
+ * AIOps 曲线配置的三级级联（用户 2026-10-17 定的交互）：
+ * 监控项（标数值/表格） -> 非主键的数值列 -> 主键行。单选，一次一条曲线。
+ * 用 el-cascader 的 lazy 模式逐级取，数据出口在 AiopsScopePicker 上。
+ */
+const aiopsCascaderProps = computed(() => ({
+  value: 'value',
+  label: 'label',
+  lazy: true,
+  checkStrictly: false,
+  emitPath: true,
+  loadData: (node: CascaderCtx, resolve: (list: unknown[]) => void) => {
+    const picker = aiopsPickerRef.value
+    void (async () => {
+      try {
+        if (node.level === 0) return resolve(picker?.cascaderItems() ?? [])
+        const itemId = String(node.data?.raw ?? node.value)
+        if (node.level === 1) return resolve(picker?.cascaderColumns(itemId) ?? [])
+        const columnId = String(node.data?.raw ?? node.value)
+        return resolve((await picker?.cascaderRows(itemId, columnId)) ?? [])
+      } catch {
+        resolve([])
+      }
+    })()
+  },
+}))
 
-  // AIOps：合成 ref col:<itemId>:<columnId> = 「表格的某一列」
-  // 选中后展开成「每个有数据的行一条曲线」（用户选的方案 A）
-  if (isAiopsDs.value && key.startsWith('col:')) {
-    const [, itemId, columnId] = key.split(':')
-    const expanded = (await aiopsPickerRef.value?.expandColumn(itemId, columnId)) ?? []
-    if (!expanded.length) {
-      ElMessage.warning('该列没有可取数的数据行（当前值为空即没有历史数据）')
-      row.item_id = ''
-      return
-    }
-    // 用展开出的曲线替换当前这一行
-    const idx = form.series.indexOf(row as (typeof form.series)[number])
-    form.series.splice(
-      idx < 0 ? form.series.length : idx,
-      1,
-      ...expanded.map((p) => ({
-        item_id: p.ref,
-        // 标签用「行名」即可，列名已在选列时确定；带上行名才分得清 7 条曲线谁是谁
-        display_name: p.rowKey ?? p.label,
-        mul: 1,
-        add: 0,
-      })),
-    )
+/** 由级联选中路径反推展示名（如「端口表 / 入流量 / Port1」） */
+function onAiopsSeriesCascaderChange(
+  row: { item_id: string; display_name: string },
+  path: unknown,
+  labels: unknown,
+): void {
+  const inst = form.instance_ids[0] ?? ''
+  const picked = Array.isArray(path) ? (path as string[]) : []
+  const names = Array.isArray(labels) ? (labels as string[]) : []
+  const itemId = picked[0]
+  if (!inst || !itemId) {
+    row.item_id = ''
     return
   }
+  const columnId = picked[1]
+  const rowKey = picked[2]
+  const ref = encodeRef(inst, itemId, columnId, rowKey)
+  if (!ref) {
+    ElMessage.warning('该列或该行无法作为取数对象')
+    row.item_id = ''
+    return
+  }
+  row.item_id = ref
+  // 用户没手动改过展示名时，用级联路径自动填
+  if (!row.display_name) row.display_name = names.filter(Boolean).join(' / ')
+}
 
+/** 编辑回显：由已保存的定位串反推级联路径（[项] / [项,列] / [项,列,行]）。 */
+function seriesRowCascaderValue(row: { item_id: string }): string[] {
+  const ref = decodeRef(row.item_id)
+  if (!ref) return []
+  if (ref.columnId === null || ref.rowKey === null) return [String(ref.itemId)]
+  return [String(ref.itemId), String(ref.columnId), ref.rowKey]
+}
+
+function onSeriesItemChange(row: { item_id: string; display_name: string }) {
   // 选中 item 时用 item 名称预填 display_name（用户可再改）
-  const it = seriesOptionSource.value.find((x) => x.item_id === key)
+  const it = seriesOptionSource.value.find((x) => x.item_id === row.item_id)
   if (it && !row.display_name) {
     row.display_name = it.name
   }
@@ -1673,7 +1714,29 @@ onMounted(load)
             class="series-row"
             :data-testid="`series-row-${idx}`"
           >
+            <el-cascader
+              v-if="isAiopsDs"
+              :model-value="seriesRowCascaderValue(row)"
+              :props="aiopsCascaderProps"
+              class="series-item"
+              placeholder="监控项 / 列 / 行"
+              clearable
+              filterable
+              data-testid="series-cascader"
+              @change="
+                (v: unknown, labels: unknown) => onAiopsSeriesCascaderChange(row, v, labels)
+              "
+            >
+              <template #default="{ data }">
+                <span class="opt-name">{{ data.label }}</span>
+                <el-tag v-if="data.tag" size="small" effect="plain" type="info">
+                  {{ data.tag }}
+                </el-tag>
+                <span v-if="data.hint" class="opt-meta">{{ data.hint }}</span>
+              </template>
+            </el-cascader>
             <el-select
+              v-else
               v-model="row.item_id"
               filterable
               remote
@@ -2228,6 +2291,14 @@ onMounted(load)
 
 .series-item {
   width: 220px;
+}
+.opt-name {
+  margin-right: var(--space-2);
+}
+.opt-meta {
+  float: right;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-xs);
 }
 
 .series-name {
