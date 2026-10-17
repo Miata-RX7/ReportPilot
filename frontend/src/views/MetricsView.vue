@@ -195,12 +195,7 @@ const aiopsCandidates = ref<AiopsPick[]>([])
 /** AIOps 级联组件实例：曲线的三级级联要从它那里逐级取数据 */
 const aiopsPickerRef = ref<InstanceType<typeof AiopsScopePicker> | null>(null)
 
-/** el-cascader lazy 的节点/上下文（只用到本文件关心的字段） */
-interface CascaderCtx {
-  level: number
-  value: unknown
-  data?: { raw?: string }
-}
+/** el-cascader lazy 的节点/上下文 —— 已改为非lazy 方案，此类型不再需要 */
 
 /** 曲线配置的下拉选项：AIOps 用候选（定位串），Zabbix 用监控项列表 */
 const seriesOptionSource = computed<ItemRef[]>(() =>
@@ -746,27 +741,81 @@ function removeSeriesRow(idx: number) {
  * 监控项（标数值/表格） -> 非主键的数值列 -> 主键行。单选，一次一条曲线。
  * 用 el-cascader 的 lazy 模式逐级取，数据出口在 AiopsScopePicker 上。
  */
-const aiopsCascaderProps = computed(() => ({
-  value: 'value',
-  label: 'label',
-  lazy: true,
-  checkStrictly: false,
-  emitPath: true,
-  loadData: (node: CascaderCtx, resolve: (list: unknown[]) => void) => {
-    const picker = aiopsPickerRef.value
-    void (async () => {
-      try {
-        if (node.level === 0) return resolve(picker?.cascaderItems() ?? [])
-        const itemId = String(node.data?.raw ?? node.value)
-        if (node.level === 1) return resolve(picker?.cascaderColumns(itemId) ?? [])
-        const columnId = String(node.data?.raw ?? node.value)
-        return resolve((await picker?.cascaderRows(itemId, columnId)) ?? [])
-      } catch {
-        resolve([])
-      }
-    })()
-  },
-}))
+/**
+ * AIOps 曲线配置的三级级联选项树。
+ *
+ * **不用 el-cascader 的 lazy 模式** —— 实测 lazy 下只要有一级没resolve，
+ * 面板就永远停在 Loading（Element Plus 用 resolve 才把 loading 置 false，
+ * 见 cascader-panel 的 lazyLoad）。第 1、2 级数据本来就在手边（item/list 一次
+ * 返回了全部列元数据），只有第 3 级的行需要发请求。
+ *
+ * 策略：**同步给出前两级 + 一个「加载中…」的占位节点**；用户点开该节点的瞬间
+ * 由 onAiopsCascaderLoad 拉真实行并写回树。这样首屏不卡、也不会卡在 Loading。
+ */
+/** 行数据缓存：key = <itemId>:<columnId> */
+const aiopsRowsCache = ref<Record<string, { value: string; label: string; hint?: string }[]>>({})
+
+const aiopsCascaderOptions = computed(() => {
+  const picker = aiopsPickerRef.value
+  if (!picker) return []
+  const rowsKey = (itemId: string, columnId: string) => `${itemId}:${columnId}`
+  return picker.cascaderItems().map((it) => {
+    if (it.selectable) {
+      return { value: it.value, label: it.label, tag: it.tag, raw: it.value }
+    }
+    return {
+      value: it.value,
+      label: it.label,
+      tag: it.tag,
+      raw: it.value,
+      children: picker.cascaderColumns(it.value).map((c) => ({
+        value: c.value,
+        label: c.label,
+        raw: c.value,
+        __rowsKey: rowsKey(it.value, c.value),
+        children: aiopsRowsCache.value[rowsKey(it.value, c.value)]?.map((r) => ({
+          value: r.value,
+          label: r.label,
+          hint: r.hint,
+        })) ?? [{ value: '__loading__', label: '加载中…' }],
+      })),
+    }
+  })
+})
+
+/** 点开某列时拉真实行，替换掉占位节点 */
+/**
+ * 预取所有数值列的行数据。
+ *
+ * 不用 lazy 是因为 lazy 一旦某级没 resolve，面板会永远停在 Loading。
+ * 改成「取数前一次性把各列的行取回来」—— 一个实例通常只有 1~2 个表格类监控项、
+ * 每项几列，且后端 item-rows 有 60s 缓存，代价可接受。
+ */
+async function prefetchAiopsRows(): Promise<void> {
+  const picker = aiopsPickerRef.value
+  if (!picker) return
+  const jobs: Promise<void>[] = []
+  for (const it of picker.cascaderItems()) {
+    if (it.selectable) continue
+    for (const c of picker.cascaderColumns(it.value)) {
+      const key = `${it.value}:${c.value}`
+      if (aiopsRowsCache.value[key]) continue
+      jobs.push(
+        picker
+          .cascaderRows(it.value, c.value)
+          .then((rows) => {
+            aiopsRowsCache.value = { ...aiopsRowsCache.value, [key]: rows }
+          })
+          .catch(() => {
+            aiopsRowsCache.value = { ...aiopsRowsCache.value, [key]: [] }
+          }),
+      )
+    }
+  }
+  await Promise.all(jobs)
+}
+
+const aiopsCascaderProps = { value: 'value', label: 'label', checkStrictly: false }
 
 /** 由级联选中路径反推展示名（如「端口表 / 入流量 / Port1」） */
 function onAiopsSeriesCascaderChange(
@@ -1093,6 +1142,8 @@ function onAiopsScopeChange() {
   aiopsPicks.value = []
   form.item_ids = []
   form.series = []
+  // 换了模型/实例后，上一批的行数据全部失效（行是实例级的）
+  aiopsRowsCache.value = {}
   pieSuitability.value = null
 }
 
@@ -1717,12 +1768,14 @@ onMounted(load)
             <el-cascader
               v-if="isAiopsDs"
               :model-value="seriesRowCascaderValue(row)"
+              :options="aiopsCascaderOptions"
               :props="aiopsCascaderProps"
               class="series-item"
               placeholder="监控项 / 列 / 行"
               clearable
               filterable
               data-testid="series-cascader"
+              @visible-change="(v: boolean) => { if (v) void prefetchAiopsRows() }"
               @change="
                 (v: unknown, labels: unknown) => onAiopsSeriesCascaderChange(row, v, labels)
               "
