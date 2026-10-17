@@ -252,7 +252,7 @@ const plainItems = computed(() => itemOptions.value.filter(plainItemAllowed))
 const candidates = computed<AiopsPick[]>(() => {
   const inst = selectedInstanceId.value
   if (!inst) return []
-  return buildPicks(
+  const base = buildPicks(
     inst,
     itemOptions.value
       .filter((i) => plainItemAllowed(i) || listSelections.value[i.item_id])
@@ -264,7 +264,53 @@ const candidates = computed<AiopsPick[]>(() => {
       })),
     listSelections.value,
   )
+  if (props.metricType !== 'curve') return base
+
+  // 曲线模式：把「表格的数值列」也作为候选项暴露出去（用户选方案 A：
+  // 选中一列后展开成「每个有数据的行一条曲线」）。
+  // 这里用合成 ref col:<itemId>:<columnId>，父组件识别到后调 expandColumn()。
+  const colCandidates: AiopsPick[] = []
+  for (const it of listItems.value) {
+    for (const c of columnsOf(it)) {
+      if (c.value_type !== 'number' || !c.has_history) continue
+      colCandidates.push({
+        ref: `col:${it.item_id}:${c.column_id}`,
+        label: `${it.name} / ${columnLabel(c)} — 展开为每行一条曲线`,
+        itemId: it.item_id,
+        itemName: it.name,
+        column: c,
+        rowKey: null,
+      })
+    }
+  }
+  return [...base, ...colCandidates]
 })
+
+/**
+ * 把「表格的某一列」展开成「每个有数据的行一条曲线」（用户 2026-10-17 选的方案 A）。
+ *
+ * 只认数值列且必须有历史 —— 无历史的列画出来必然是空图。
+ * 行由后端按「该列当前值非空」过滤过（实测当前值非空⟺有历史），
+ * 所以这里拿到的每一行都真的能画出曲线。
+ */
+async function expandColumn(itemId: string, columnId: string): Promise<AiopsPick[]> {
+  const inst = selectedInstanceId.value
+  if (!inst || props.datasourceId === null) return []
+  const it = itemOptions.value.find((i) => i.item_id === itemId)
+  const column = it ? columnById(it, columnId) : null
+  if (!it || !column || column.value_type !== 'number' || !column.has_history) return []
+  try {
+    const { data } = await dataSourceApi.listItemRows(props.datasourceId, inst, itemId, columnId)
+    if (!data.length) return []
+    return buildPicks(
+      inst,
+      [{ id: itemId, name: it.name, dataType: 'list', columns: it.aiops_columns }],
+      { [itemId]: { columnId, rowKeys: data.map((r) => r.row_key) } },
+    )
+  } catch {
+    return []
+  }
+}
 
 watch(candidates, (v) => emit('update:candidates', v), { immediate: true, deep: true })
 
@@ -333,7 +379,7 @@ watch(
   { deep: true, immediate: true },
 )
 
-defineExpose({ plainItemAllowed })
+defineExpose({ plainItemAllowed, expandColumn })
 </script>
 
 <template>

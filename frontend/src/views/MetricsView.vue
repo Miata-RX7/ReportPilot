@@ -192,6 +192,9 @@ const aiopsPicks = ref<AiopsPick[]>([])
  */
 const aiopsCandidates = ref<AiopsPick[]>([])
 
+/** AIOps 级联组件实例：曲线展开某一列时要调它的 expandColumn() */
+const aiopsPickerRef = ref<InstanceType<typeof AiopsScopePicker> | null>(null)
+
 /** 曲线配置的下拉选项：AIOps 用候选（定位串），Zabbix 用监控项列表 */
 const seriesOptionSource = computed<ItemRef[]>(() =>
   isAiopsDs.value
@@ -731,9 +734,37 @@ function removeSeriesRow(idx: number) {
   form.series.splice(idx, 1)
 }
 
-function onSeriesItemChange(row: { item_id: string; display_name: string }) {
+async function onSeriesItemChange(row: { item_id: string; display_name: string }) {
+  const key = row.item_id
+
+  // AIOps：合成 ref col:<itemId>:<columnId> = 「表格的某一列」
+  // 选中后展开成「每个有数据的行一条曲线」（用户选的方案 A）
+  if (isAiopsDs.value && key.startsWith('col:')) {
+    const [, itemId, columnId] = key.split(':')
+    const expanded = (await aiopsPickerRef.value?.expandColumn(itemId, columnId)) ?? []
+    if (!expanded.length) {
+      ElMessage.warning('该列没有可取数的数据行（当前值为空即没有历史数据）')
+      row.item_id = ''
+      return
+    }
+    // 用展开出的曲线替换当前这一行
+    const idx = form.series.indexOf(row as (typeof form.series)[number])
+    form.series.splice(
+      idx < 0 ? form.series.length : idx,
+      1,
+      ...expanded.map((p) => ({
+        item_id: p.ref,
+        // 标签用「行名」即可，列名已在选列时确定；带上行名才分得清 7 条曲线谁是谁
+        display_name: p.rowKey ?? p.label,
+        mul: 1,
+        add: 0,
+      })),
+    )
+    return
+  }
+
   // 选中 item 时用 item 名称预填 display_name（用户可再改）
-  const it = itemOptions.value.find((x) => x.item_id === row.item_id)
+  const it = seriesOptionSource.value.find((x) => x.item_id === key)
   if (it && !row.display_name) {
     row.display_name = it.name
   }
@@ -1515,6 +1546,7 @@ onMounted(load)
         <!-- AIOps：独立级联（模型 → 实例 → 监控项 → 列 → 主键行） -->
         <AiopsScopePicker
           v-if="isAiopsDs"
+          ref="aiopsPickerRef"
           :datasource-id="form.data_source_id"
           :model-ids="form.model_ids"
           :instance-ids="form.instance_ids"
