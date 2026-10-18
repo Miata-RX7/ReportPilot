@@ -229,8 +229,9 @@ watch(dsId, () => {
  */
 const effectiveItemIds = computed(() => {
   if (!isAiopsDs.value) return [...form.item_ids]
-  // 数值用级联行（可多项聚合），文本用组件里的下拉
+  // 数值用级联行（可多项聚合），文本用单行级联，曲线不用 item_ids
   if (form.metric_type === 'scalar') return [...aiopsScalarItemIds.value]
+  if (form.metric_type === 'text') return aiopsTextRef.value ? [aiopsTextRef.value] : []
   return aiopsPicks.value.map((p) => p.ref)
 })
 
@@ -518,6 +519,10 @@ async function openEdit(row: MetricDefinitionRead) {
   aiopsPicks.value = buildPicksFromRefs(aiopsRefs)
   // 数值型的取数对象存在级联行里（scalar 的 item_ids 是多项）
   aiopsScalarRefs.value = [...(row.query_config.item_ids ?? [])]
+  // 文本型单选用同一个数组的第一项
+  aiopsTextRef.value = form.metric_type === 'text' ? (row.query_config.item_ids?.[0] ?? '') : ''
+  // 文本型单选用同一个数组的第一项
+  aiopsTextRef.value = form.metric_type === 'text' ? (row.query_config.item_ids?.[0] ?? '') : ''
   // 曲线的取数对象与展示名/数值变换都存在 series 里，一并回填
   form.series = (row.query_config.series ?? []).map((s) => {
     const one = s as { item_id?: string; display_name?: string; transform?: { mul?: number; add?: number } }
@@ -800,9 +805,12 @@ async function prefetchAiopsRows(): Promise<void> {
   const picker = aiopsPickerRef.value
   if (!picker) return
   const jobs: Promise<void>[] = []
-  for (const it of picker.cascaderItems()) {
-    if (it.selectable) continue
-    for (const c of picker.cascaderColumns(it.value)) {
+  // 数值/曲线用数值列，文本用 text 列 —— 两套都要预取，否则切类型时又变「加载中」
+  const modes = [false, true] as const
+  for (const onlyText of modes) {
+    for (const it of picker.cascaderItems({ onlyText })) {
+      if (it.selectable) continue
+      for (const c of picker.cascaderColumns(it.value, { onlyText })) {
       const key = `${it.value}:${c.value}`
       if (aiopsRowsCache.value[key]) continue
       jobs.push(
@@ -816,6 +824,7 @@ async function prefetchAiopsRows(): Promise<void> {
           }),
       )
     }
+  }
   }
   await Promise.all(jobs)
 }
@@ -895,6 +904,54 @@ function onAiopsScalarChange(idx: number, path: unknown, labels: unknown): void 
 
 /** 落库用的数值取数对象（去掉空行） */
 const aiopsScalarItemIds = computed(() => aiopsScalarRefs.value.filter(Boolean))
+
+/* ------------------------------------------------------------ 文本型（单选） */
+
+/**
+ * 文本指标的取数对象：与数值**同一套三级级联**，但只允许一个
+ * （后端 mode=latest 要求 item_ids 恰好 1 个）。
+ */
+const aiopsTextRef = ref('')
+
+function aiopsTextValue(): string[] {
+  return seriesRowCascaderValue({ item_id: aiopsTextRef.value })
+}
+
+function onAiopsTextChange(path: unknown): void {
+  const inst = form.instance_ids[0] ?? ''
+  const picked = Array.isArray(path) ? (path as string[]) : []
+  const itemId = picked[0]
+  aiopsTextRef.value = itemId ? (encodeRef(inst, itemId, picked[1], picked[2]) ?? '') : ''
+}
+
+/** 文本型专用选项树：文本类监控项 + 表格里的 text 列（行同样来自 aiopsRowsCache） */
+const aiopsTextCascaderOptions = computed(() => {
+  const picker = aiopsPickerRef.value
+  if (!picker) return []
+  return picker.cascaderItems({ onlyText: true }).map((it) => {
+    if (it.selectable) return { value: it.value, label: it.label, tag: it.tag, raw: it.value }
+    return {
+      value: it.value,
+      label: it.label,
+      tag: it.tag,
+      raw: it.value,
+      children: picker.cascaderColumns(it.value, { onlyText: true }).map((c) => {
+        const key = `${it.value}:${c.value}`
+        return {
+          value: c.value,
+          label: c.label,
+          raw: c.value,
+          children:
+            aiopsRowsCache.value[key]?.map((r) => ({
+              value: r.value,
+              label: r.label,
+              hint: r.hint,
+            })) ?? [{ value: '__loading__', label: '加载中…' }],
+        }
+      }),
+    }
+  })
+})
 
 function onSeriesItemChange(row: { item_id: string; display_name: string }) {
   // 选中 item 时用 item 名称预填 display_name（用户可再改）
@@ -1695,10 +1752,8 @@ onMounted(load)
           @scope-change="onAiopsScopeChange"
         />
 
-        <!-- Zabbix：原有三级联（路径与升级前完全一致） -->
         <!-- 数值型（AIOps）：与曲线一致的三级级联，可增删多项做聚合 -->
         <div v-if="isAiopsDs && form.metric_type === 'scalar'" class="aiops-scalar">
-          <div class="form-section">取数配置</div>
           <el-form-item label="监控项" required>
             <div class="aiops-scalar__rows">
               <div v-for="(ref, idx) in aiopsScalarRefs" :key="idx" class="series-row">
@@ -1735,6 +1790,63 @@ onMounted(load)
                 请至少添加一个监控项（可添加多项，再用下方「聚合方式」合并）
               </div>
             </div>
+          </el-form-item>
+        </div>
+
+        <!-- Zabbix：原有三级联（路径与升级前完全一致） -->
+        <!-- 文本型（AIOps）：与数值同一套三级级联，单选 -->
+        <div v-if="isAiopsDs && form.metric_type === 'text' && form.text_mode === 'latest'">
+          <el-form-item label="监控项" required>
+            <div class="aiops-scalar__rows">
+              <el-cascader
+                :model-value="aiopsTextValue()"
+                :options="aiopsTextCascaderOptions"
+                :props="aiopsCascaderProps"
+                class="full-width"
+                placeholder="监控项 / 列 / 行"
+                clearable
+                filterable
+                data-testid="text-cascader"
+                @visible-change="(v: boolean) => { if (v) void prefetchAiopsRows() }"
+                @change="(v: unknown) => onAiopsTextChange(v)"
+              >
+                <template #default="{ data }">
+                  <span class="opt-name">{{ data.label }}</span>
+                  <el-tag v-if="data.tag" size="small" effect="plain" type="info">
+                    {{ data.tag }}
+                  </el-tag>
+                  <span v-if="data.hint" class="opt-meta">{{ data.hint }}</span>
+                </template>
+              </el-cascader>
+            </div>
+          </el-form-item>
+        </div>
+
+        <!-- 文本型（AIOps）：与数值同一套三级级联，单选 -->
+        <div
+          v-if="isAiopsDs && form.metric_type === 'text' && form.text_mode === 'latest'"
+        >
+          <el-form-item label="监控项" required>
+            <el-cascader
+              :model-value="aiopsTextValue()"
+              :options="aiopsTextCascaderOptions"
+              :props="aiopsCascaderProps"
+              class="full-width"
+              placeholder="监控项 / 列 / 行"
+              clearable
+              filterable
+              data-testid="text-cascader"
+              @visible-change="(v: boolean) => { if (v) void prefetchAiopsRows() }"
+              @change="(v: unknown) => onAiopsTextChange(v)"
+            >
+              <template #default="{ data }">
+                <span class="opt-name">{{ data.label }}</span>
+                <el-tag v-if="data.tag" size="small" effect="plain" type="info">
+                  {{ data.tag }}
+                </el-tag>
+                <span v-if="data.hint" class="opt-meta">{{ data.hint }}</span>
+              </template>
+            </el-cascader>
           </el-form-item>
         </div>
 
@@ -2100,21 +2212,24 @@ onMounted(load)
 
         <template v-if="form.metric_type === 'scalar'">
         <div class="form-section">计算配置</div>
-        <el-form-item label="聚合方式" prop="agg">
-          <el-select v-model="form.agg" class="full-width">
-            <el-option label="平均（avg）" value="avg" />
-            <el-option label="求和（sum）" value="sum" />
-            <el-option label="最大（max）" value="max" />
-            <el-option label="最小（min）" value="min" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="对比方式" prop="compare">
-          <el-select v-model="form.compare" class="full-width">
-            <el-option label="无对比（none）" value="none" />
-            <el-option label="环比（mom）" value="mom" />
-            <el-option label="同比（yoy）" value="yoy" />
-          </el-select>
-        </el-form-item>
+        <!-- 聚合与对比都是「选一个口径」，上下两行纯浪费纵向空间，放同一行 -->
+        <div class="transform-row">
+          <el-form-item label="聚合方式" prop="agg">
+            <el-select v-model="form.agg" class="full-width">
+              <el-option label="平均（avg）" value="avg" />
+              <el-option label="求和（sum）" value="sum" />
+              <el-option label="最大（max）" value="max" />
+              <el-option label="最小（min）" value="min" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="对比方式" prop="compare">
+            <el-select v-model="form.compare" class="full-width">
+              <el-option label="无对比（none）" value="none" />
+              <el-option label="环比（mom）" value="mom" />
+              <el-option label="同比（yoy）" value="yoy" />
+            </el-select>
+          </el-form-item>
+        </div>
         <el-form-item v-if="form.compare !== 'none'" label="回溯周期" prop="baseline_lookback">
           <el-input-number v-model="form.baseline_lookback" :min="1" />
           <span class="text-muted form-hint">mom 通常为 1，yoy 通常为 12</span>
