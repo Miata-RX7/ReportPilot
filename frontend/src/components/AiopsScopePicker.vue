@@ -305,25 +305,42 @@ function sortItems(items: ItemRef[]): ItemRef[] {
   })
 }
 
-/** 第 1 级：监控项（数值 / 表格，标注类型）。文本类不出现 —— 它只能做文本指标。 */
-function cascaderItems(): CascaderNode[] {
+/**
+ * 第 1 级：监控项（标注「数值」/「表格」/「文本」）。
+ *
+ * @param onlyText true = 只给文本类（文本型监控项 + 表格类，表格要再挑 text 列）；
+ *   不传 = 数值 + 表格（数值/曲线/饼图用）。
+ */
+function cascaderItems(opts?: { onlyText?: boolean }): CascaderNode[] {
+  const onlyText = opts?.onlyText === true
   return sortItems(itemOptions.value)
-    .filter((i) => i.aiops_data_type !== 'text')
+    .filter((i) => (onlyText ? i.aiops_data_type !== 'number' : i.aiops_data_type !== 'text'))
     .map((i) => ({
       value: i.item_id,
       raw: i.item_id,
       label: i.name,
-      tag: i.aiops_data_type === 'list' ? '表格' : '数值',
-      // 表格项必须继续往下选列与行；数值项本身就是取数对象，可直接选中
+      tag:
+        i.aiops_data_type === 'list' ? '表格' : onlyText ? '文本' : '数值',
+      // 表格项必须继续往下选列与行；简单项本身就是取数对象，可直接选中
       selectable: i.aiops_data_type !== 'list',
     }))
 }
 
-/** 第 2 级：非主键列中「数值类型且有历史」的列（用户 2026-10-17 明确要求）。 */
-function cascaderColumns(itemId: string): CascaderNode[] {
+/**
+ * 第 2 级：列。
+ *
+ * 默认（数值/曲线）：非主键列 + 数值类型 + 有历史 —— 无历史的列画出来必然是空图。
+ * onlyText：非主键列 + text 类型（文本列不要求有历史，当前值本身就是要取的值）。
+ */
+function cascaderColumns(itemId: string, opts?: { onlyText?: boolean }): CascaderNode[] {
   const it = itemOptions.value.find((i) => i.item_id === itemId)
+  const onlyText = opts?.onlyText === true
   return (it?.aiops_columns ?? [])
-    .filter((c) => !c.is_primary && c.value_type === 'number' && c.has_history)
+    .filter((c) =>
+      onlyText
+        ? !c.is_primary && c.value_type === 'text'
+        : !c.is_primary && c.value_type === 'number' && c.has_history,
+    )
     .map((c) => ({
       value: String(c.column_id),
       raw: String(c.column_id),
