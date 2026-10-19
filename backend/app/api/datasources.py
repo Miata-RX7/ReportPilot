@@ -25,6 +25,7 @@ from app.schemas.datasource import (
     HostRef,
     ItemRef,
     ItemRowRef,
+    ItemRowsBulk,
 )
 from app.services.adapters import build_adapter
 from app.services.adapters.base import (
@@ -376,6 +377,55 @@ async def analyze_pie_suitability(
             f"item_id 必须是数字: {payload.item_id!r}",
         ) from None
     return await pie_suitability.analyze_pie_suitability(adapter, item_id)
+
+
+@router.get(
+    "/{ds_id}/item-rows/bulk",
+    response_model=ItemRowsBulk,
+    response_model_exclude_none=True,
+)
+async def list_ds_item_rows_bulk(
+    ds_id: int,
+    instance_id: str = Query(..., description="AIOps 实例 id"),
+    item_id: str = Query(..., description="AIOps list 型监控项 id"),
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> ItemRowsBulk:
+    """一次返回该 list 型监控项**所有列**的主键行。
+
+    单列版``item-rows`` 每列一次请求，一个 8 列的端口表就是 8 次；
+    这里底层同样走 status 接口（一次就返回全部列），请求数降到 1 次/监控项。
+    """
+    ds = await _get_or_404(db, ds_id)
+    if ds.type != "aiops":
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "该端点仅适用于 AIOps 数据源",
+        )
+    adapter, _ = await load_adapter_and_name(db, ds_id)
+    try:
+        columns = await adapter.list_item_rows_bulk(
+            instance_id=instance_id, item_id=item_id
+        )
+    except AdapterError as exc:
+        raise _adapter_http_error(exc) from None
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, f"参数非法: {exc}"
+        ) from None
+    return ItemRowsBulk(
+        columns={
+            cid: [
+                ItemRowRef(
+                    row_key=str(r["row_key"]),
+                    current_value=str(r.get("current_value") or ""),
+                    as_of=int(r.get("as_of") or 0),
+                )
+                for r in rows
+            ]
+            for cid, rows in columns.items()
+        }
+    )
 
 
 @router.get(

@@ -118,6 +118,18 @@
         </template>
       </el-table-column>
     </el-table>
+
+      <div class="pager">
+        <el-pagination
+          layout="total, sizes, prev, pager, next, jumper"
+          :total="total"
+          :current-page="page"
+          :page-size="pageSize"
+          :page-sizes="[10, 20, 50, 100]"
+          @current-change="(v: number) => { page = v; void load() }"
+          @size-change="(v: number) => { pageSize = v; page = 1; void load() }"
+        />
+      </div>
   </div>
 </template>
 
@@ -136,6 +148,9 @@ import { formatDateTime } from '@/utils/format'
 
 const rows = ref<PushRecord[]>([])
 const total = ref(0)
+/** 分页：后端 limit/offset 都支持，直接按页取，不再一次性拉 200 条 */
+const page = ref(1)
+const pageSize = ref(10)
 const loading = ref(false)
 
 const filterStatus = ref<'' | PushRecordStatus>('')
@@ -163,7 +178,8 @@ async function load() {
       status: filterStatus.value || null,
       action: filterAction.value || null,
       keyword: keyword.value.trim() || null,
-      limit: 200,
+      limit: pageSize.value,
+      offset: (page.value - 1) * pageSize.value,
     })
     rows.value = data.items
     total.value = data.total
@@ -175,6 +191,8 @@ async function load() {
 }
 
 function onFilter() {
+  // 筛选变了要回到第一页，否则可能停在超出范围的页码上
+  page.value = 1
   void load()
 }
 
@@ -182,6 +200,7 @@ function onReset() {
   filterStatus.value = ''
   filterAction.value = ''
   keyword.value = ''
+  page.value = 1
   void load()
 }
 
@@ -215,6 +234,11 @@ onMounted(load)
   width: 240px;
 }
 
+.pager {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: var(--space-3);
+}
 .total-hint {
   font-size: 13px;
 }

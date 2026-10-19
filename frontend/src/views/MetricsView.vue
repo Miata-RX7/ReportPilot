@@ -84,6 +84,16 @@ const tagFilter = ref<string[]>([])
 const nameFilter = ref('')
 const statusFilter = ref<'' | 'active' | 'inactive'>('')
 const allTags = ref<string[]>([])
+/*分页：后端列表接口返回全量（当前量级几十条），前端切片即可，不改 API 契约 */
+const page = ref(1)
+const pageSize = ref(10)
+
+const pagedRows = computed(() => {
+  const list = visibleRows.value
+  const start = (page.value - 1) * pageSize.value
+  return list.slice(start, start + pageSize.value)
+})
+
 const visibleRows = computed(() =>
   rows.value.filter((r) => {
     if (nameFilter.value && !r.name.toLowerCase().includes(nameFilter.value.trim().toLowerCase())) {
@@ -94,6 +104,11 @@ const visibleRows = computed(() =>
     return true
   }),
 )
+
+// 筛选条件变化后要把页码收回第一页，否则可能停在超出范围的页码上（列表看起来是空的）
+watch([nameFilter, statusFilter, tagFilter], () => {
+  page.value = 1
+})
 
 /* ---- 新增/编辑弹窗 ---- */
 const dialogVisible = ref(false)
@@ -841,27 +856,18 @@ const aiopsRowsPrefetching = ref(false)
 async function doPrefetchAiopsRows(): Promise<void> {
   const picker = aiopsPickerRef.value
   if (!picker) return
-  const jobs: Promise<void>[] = []
-  // 数值/曲线用数值列，文本用 text 列 —— 两套都要预取，否则切类型时又变「加载中」
-  for (const it of aiopsCascaderItems.value) {
-    if (!it.isList) continue
-    for (const c of it.columns) {
-      if (c.is_primary) continue
-      const key = `${it.item_id}:${c.column_id}`
-      if (aiopsRowsCache.value[key]) continue
-      jobs.push(
-        picker
-          .cascaderRows(it.item_id, String(c.column_id))
-          .then((rows) => {
-            aiopsRowsCache.value = { ...aiopsRowsCache.value, [key]: rows }
-          })
-          .catch(() => {
-            aiopsRowsCache.value = { ...aiopsRowsCache.value, [key]: [] }
-          }),
-      )
-    }
-  }
-  await Promise.all(jobs)
+  // 每个 list 型监控项**一次**请求拿全列（原来按列逐个请求，8 列就是 8 次）
+  const jobs = aiopsCascaderItems.value
+    .filter((it) => it.isList)
+    .filter((it) => !it.columns.every((c) => aiopsRowsCache.value[`${it.item_id}:${c.column_id}`]))
+    .map((it) =>
+      picker.cascaderRowsBulk(it.item_id).then((byColumn) => {
+        const next = { ...aiopsRowsCache.value }
+        for (const [col, rows] of Object.entries(byColumn)) next[`${it.item_id}:${col}`] = rows
+        aiopsRowsCache.value = next
+      }),
+    )
+  await Promise.all(jobs.map((p) => p.catch(() => undefined)))
 }
 
 const aiopsCascaderProps = { value: 'value', label: 'label', checkStrictly: false }
@@ -1565,7 +1571,17 @@ onMounted(load)
       </el-select>
     </div>
 
-    <DataTable :data="visibleRows" :loading="loading" empty-text="暂无指标，点击右上角新增">
+    <DataTable
+          :data="pagedRows"
+          :loading="loading"
+          empty-text="暂无指标，点击右上角新增"
+          pagination
+          :total="visibleRows.length"
+          :page="page"
+          :page-size="pageSize"
+          @update:page="(v: number) => (page = v)"
+          @update:page-size="(v: number) => { pageSize = v; page = 1 }"
+        >
       <template #columns>
         <el-table-column prop="name" label="名称" min-width="150" />
         <el-table-column label="类型" width="100">

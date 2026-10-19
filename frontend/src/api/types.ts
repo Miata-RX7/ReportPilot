@@ -290,6 +290,11 @@ export interface AIOpsColumn {
   is_primary: boolean
 }
 
+/** AIOps list 型监控项一个监控项**所有列**的主键行（一次请求拿全）。 */
+export interface ItemRowsBulk {
+  columns: Record<string, ItemRowRef[]>
+}
+
 /** AIOps list 型监控项的一个主键行（只返回该列当前值非空的行）。 */
 export interface ItemRowRef {
   row_key: string

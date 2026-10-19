@@ -618,6 +618,41 @@ class AIOpsAdapter(DataSourceAdapter):
             )
         return out
 
+    async def list_item_rows_bulk(
+        self,
+        *,
+        instance_id: str,
+        item_id: str,
+    ) -> dict[str, list[dict[str, Any]]]:
+        """一次拿到 list 型监控项**所有列**的行。
+
+        为什么需要：``status`` 接口本身就一次返回该监控项的全部列，按列逐个请求
+        等于把 1 次请求放大成 N 次（实测端口表有 8 个数值列 -> 8 次）。
+        这里只解析那一份响应，按列分组并各自做「当前值非空」过滤。
+
+        返回 ``{列 id 字符串: [{row_key, current_value, as_of}]}``。
+        """
+        iid, cid = int(instance_id), int(item_id)
+        table, ts = await self._status_table(iid, cid)
+        meta = await self._item_meta(iid, cid)
+        primary_id = _first_primary(meta)
+        if primary_id is None:
+            return {}
+        names = table.get(str(primary_id)) or []
+        out: dict[str, list[dict[str, Any]]] = {}
+        for col_id, values in table.items():
+            rows: list[dict[str, Any]] = []
+            for idx, name in enumerate(names):
+                current = values[idx] if idx < len(values) else ""
+                if str(current).strip() == "":
+                    continue
+                rows.append(
+                    {"row_key": str(name), "current_value": str(current), "as_of": ts}
+                )
+            if rows:
+                out[str(col_id)] = rows
+        return out
+
     async def list_item_rows(
         self,
         *,
