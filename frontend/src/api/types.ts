@@ -196,7 +196,6 @@ export interface MetricDefinitionRead {
   type_config: TypeConfig
   calc_formula: CalcFormula
   unit: string
-  period_type: string
   display_precision: number | null
   tags: string[]
   /** null / {"mode":"none"} = 不换算 */
@@ -235,7 +234,6 @@ export interface MetricDefinitionCreate {
   /** 仅 scalar 使用 */
   calc_formula?: CalcFormula
   unit: string
-  period_type: string
   display_precision?: number | null
   tags?: string[]
   unit_config?: UnitScaleConfig | null
@@ -249,7 +247,6 @@ export interface MetricDefinitionUpdate {
   type_config?: TypeConfig
   calc_formula?: CalcFormula
   unit?: string
-  period_type?: string
   display_precision?: number | null
   tags?: string[]
   /** 传 {"mode":"none"} 关闭换算；不传 = 本次不修改 */

@@ -205,7 +205,6 @@ curl.exe -X POST http://localhost:8000/api/metrics \
     },
     "calc_formula": {"agg": "avg", "compare": "mom", "baseline_lookback": 1},
     "unit": "%",
-    "period_type": "monthly",
     "display_precision": 2
   }'
 ```

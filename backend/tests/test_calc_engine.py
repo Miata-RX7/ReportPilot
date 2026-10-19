@@ -65,7 +65,6 @@ def make_metric(
         or {"host_group_ids": ["4"], "host_ids": ["1"], "item_ids": ["101"]},
         calc_formula=calc_formula or {"agg": "avg", "compare": "none"},
         unit="%",
-        period_type="monthly",
     )
 
 
@@ -394,7 +393,6 @@ class TestPieLabels:
             name="m",
             data_source_id=1,
             unit="",
-            period_type="monthly",
             display_precision=None,
             metric_type="pie",
             query_config={

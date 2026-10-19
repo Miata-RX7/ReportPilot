@@ -65,7 +65,6 @@ METRIC_PAYLOAD = {
     "query_config": {"host_group_ids": ["4"], "host_ids": ["1"], "item_ids": ["101"]},
     "calc_formula": {"agg": "avg", "compare": "none"},
     "unit": "%",
-    "period_type": "monthly",
 }
 
 

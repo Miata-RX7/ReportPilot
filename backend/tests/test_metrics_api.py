@@ -43,7 +43,6 @@ METRIC_PAYLOAD = {
     },
     "calc_formula": {"agg": "avg", "compare": "mom", "baseline_lookback": 1},
     "unit": "%",
-    "period_type": "monthly",
     "tags": ["核心", "网络"],
 }
 

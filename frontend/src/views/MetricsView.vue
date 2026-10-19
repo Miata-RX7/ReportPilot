@@ -132,7 +132,6 @@ const form = reactive({
   name: '',
   data_source_id: null as number | null,
   unit: '',
-  period_type: 'monthly',
   display_precision: null as number | null,
   tags: [] as string[],
   host_group_ids: [] as string[],
@@ -471,7 +470,6 @@ function resetForm() {
     name: '',
     data_source_id: null,
     unit: '',
-    period_type: 'monthly',
     display_precision: null,
     tags: [],
     host_group_ids: [],
@@ -526,7 +524,6 @@ async function openEdit(row: MetricDefinitionRead) {
     name: row.name,
     data_source_id: row.data_source_id,
     unit: row.unit,
-    period_type: row.period_type,
     display_precision: row.display_precision,
     tags: [...(row.tags ?? [])],
     agg: row.calc_formula.agg,
@@ -1303,7 +1300,6 @@ function buildPayload(): MetricDefinitionCreate {
     name: form.name,
     data_source_id: form.data_source_id,
     unit: normalizedUnit(),
-    period_type: form.period_type,
     display_precision: form.display_precision,
     tags: [...form.tags],
     // pie/text/time 没有单位能力，一律不带换算，避免后端 422
@@ -1350,7 +1346,6 @@ function buildPayload(): MetricDefinitionCreate {
       name: form.name,
       data_source_id: null,
       unit: normalizedUnit(),
-      period_type: 'monthly',
       display_precision: form.display_precision,
       tags: [...form.tags],
       metric_type: 'time' as const,
@@ -1755,11 +1750,6 @@ onMounted(load)
           <div v-if="form.unit_legacy_notice" class="unit-warn" data-testid="unit-legacy-notice">
             {{ form.unit_legacy_notice }}
           </div>
-        </el-form-item>
-        <el-form-item v-if="form.metric_type !== 'time'" label="统计周期" prop="period_type">
-          <el-select v-model="form.period_type" class="full-width" disabled>
-            <el-option label="月报（monthly）" value="monthly" />
-          </el-select>
         </el-form-item>
         <el-form-item v-if="form.metric_type !== 'time'" label="小数精度" prop="display_precision">
           <el-input-number v-model="form.display_precision" :min="0" :max="6" placeholder="留空用 %g" />

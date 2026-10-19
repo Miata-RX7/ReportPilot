@@ -135,7 +135,6 @@ def _metric(
         unit=unit,
         unit_config=unit_config,
         display_precision=display_precision,
-        period_type="monthly",
     )
 
 
@@ -422,7 +421,6 @@ class TestCreateUnionValidation:
             "name": "m",
             "data_source_id": 1,
             "unit": "%",
-            "period_type": "monthly",
             "display_precision": None,
             "tags": [],
         }

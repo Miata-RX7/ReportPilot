@@ -119,7 +119,6 @@ async def _seed(
         query_config={"host_group_ids": ["4"], "host_ids": ["1"], "item_ids": ["101"]},
         calc_formula={"agg": "avg", "compare": "none"},
         unit="%",
-        period_type="monthly",
     )
     tpl_path = make_docx(
         tmp_path / "tpl.docx",
@@ -233,7 +232,6 @@ class TestRenderPreview:
             query_config={"host_group_ids": ["4"], "host_ids": ["1"], "item_ids": ["101"]},
             calc_formula={"agg": "avg", "compare": "none"},
             unit="%",
-            period_type="monthly",
         )
         session.add(metric2)
         await session.flush()

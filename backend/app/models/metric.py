@@ -61,8 +61,6 @@ class MetricDefinition(TimestampMixin, Base):
     unit_config: Mapped[dict[str, Any] | None] = mapped_column(
         JSONVariant, nullable=True
     )
-    # monthly / weekly / daily
-    period_type: Mapped[str] = mapped_column(String(16), default="monthly")
     # 渲染小数位数：None -> %g；N -> f"{value:.Nf}"
     display_precision: Mapped[int | None] = mapped_column(nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)

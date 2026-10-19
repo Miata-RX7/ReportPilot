@@ -45,7 +45,6 @@ def make_metric(
         name="now",
         data_source_id=None,
         unit="",
-        period_type="monthly",
         display_precision=None,
         metric_type="time",
         query_config={},
