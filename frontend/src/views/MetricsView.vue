@@ -826,6 +826,21 @@ const aiopsCascaderOptions = computed(() => buildCascaderTree(false))
 async function prefetchAiopsRows(): Promise<void> {
   const picker = aiopsPickerRef.value
   if (!picker) return
+  if (aiopsRowsPrefetching.value) return
+  aiopsRowsPrefetching.value = true
+  try {
+    await doPrefetchAiopsRows()
+  } finally {
+    aiopsRowsPrefetching.value = false
+  }
+}
+
+/** 重入保护：快照变化可能连着触发多次，别把同一批列重复请求出去 */
+const aiopsRowsPrefetching = ref(false)
+
+async function doPrefetchAiopsRows(): Promise<void> {
+  const picker = aiopsPickerRef.value
+  if (!picker) return
   const jobs: Promise<void>[] = []
   // 数值/曲线用数值列，文本用 text 列 —— 两套都要预取，否则切类型时又变「加载中」
   for (const it of aiopsCascaderItems.value) {
@@ -850,6 +865,55 @@ async function prefetchAiopsRows(): Promise<void> {
 }
 
 const aiopsCascaderProps = { value: 'value', label: 'label', checkStrictly: false }
+
+/**
+ * 快照一到就预取各列的行 + 补齐曲线的展示名。
+ *
+ * **不能只在展开下拉时预取**：编辑回显时下拉并不会被打开，而 el-cascader
+ * 只有三级选项都在才能显示已选值 —— 缺第三级就整格空白（实测踩过：
+ * series 存的是 l:...:行 的行级定位串，却因为没预取而显示不出来）。
+ */
+watch(
+  aiopsCascaderItems,
+  async () => {
+    await prefetchAiopsRows()
+    backfillAiopsSeriesNames()
+  },
+  { immediate: true },
+)
+
+/** 老数据 display_name 是空的，用级联路径回填一个可读名 */
+function backfillAiopsSeriesNames(): void {
+  if (form.metric_type !== 'curve') return
+  const labelOf = (ref: string): string => {
+    const path = seriesRowCascaderValue({ item_id: ref })
+    if (!path.length) return ''
+    let labels: string[] = []
+    walkCascader(aiopsCascaderOptions.value, path, (found) => {
+      labels = found
+    })
+    return labels.filter(Boolean).join(' / ')
+  }
+  form.series = form.series.map((s) =>
+    s.display_name ? s : { ...s, display_name: labelOf(s.item_id) },
+  )
+}
+
+/** 按值路径在级联树里收集标签 */
+function walkCascader(
+  nodes: { value: string; label: string; children?: unknown[] }[],
+  path: string[],
+  done: (labels: string[]) => void,
+): void {
+  const [head, ...rest] = path
+  const hit = nodes.find((n) => String(n.value) === String(head))
+  if (!hit) return
+  if (!rest.length) {
+    done([hit.label])
+    return
+  }
+  walkCascader((hit.children ?? []) as { value: string; label: string }[], rest, done)
+}
 
 /** 由级联选中路径反推展示名（如「端口表 / 入流量 / Port1」） */
 function onAiopsSeriesCascaderChange(
