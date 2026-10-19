@@ -883,43 +883,22 @@ watch(
   aiopsCascaderItems,
   async () => {
     await prefetchAiopsRows()
-    backfillAiopsSeriesNames()
   },
   { immediate: true },
 )
 
-/** 老数据 display_name 是空的，用级联路径回填一个可读名 */
-function backfillAiopsSeriesNames(): void {
-  if (form.metric_type !== 'curve') return
-  const labelOf = (ref: string): string => {
-    const path = seriesRowCascaderValue({ item_id: ref })
-    if (!path.length) return ''
-    let labels: string[] = []
-    walkCascader(aiopsCascaderOptions.value, path, (found) => {
-      labels = found
-    })
-    return labels.filter(Boolean).join(' / ')
-  }
-  form.series = form.series.map((s) =>
-    s.display_name ? s : { ...s, display_name: labelOf(s.item_id) },
-  )
-}
-
-/** 按值路径在级联树里收集标签 */
-function walkCascader(
-  nodes: { value: string; label: string; children?: unknown[] }[],
-  path: string[],
-  done: (labels: string[]) => void,
-): void {
-  const [head, ...rest] = path
-  const hit = nodes.find((n) => String(n.value) === String(head))
-  if (!hit) return
-  if (!rest.length) {
-    done([hit.label])
-    return
-  }
-  walkCascader((hit.children ?? []) as { value: string; label: string }[], rest, done)
-}
+/**
+ * **不要**在这里回显 display_name。
+ *
+ * 曾经加过一个「打开编辑时用级联路径自动补全显示名称」的逻辑，结果用户只是没填
+ * 显示名称、保存、再打开编辑，名字就凭空出现了 —— 更糟的是自动补的名字会被下一次
+ * 保存固化进库，等于替用户改了数据。而且级联树尚未加载完时只能匹配到叶子节点，
+ * 叶子标签就是主键行的值（某些监控项正好是 IP），于是又出现「显示名称变成 IP」。
+ *
+ * 留空是用户的正当选择：曲线图例为空时后端会用解析出的监控项名兜底。
+ * Zabbix 路径也只在**用户手动选监控项**时自动填（onSeriesItemChange 的 @change），
+ * 不在回显时填 —— 这里保持一致。
+ */
 
 /** 由级联选中路径反推展示名（如「端口表 / 入流量 / Port1」） */
 function onAiopsSeriesCascaderChange(
