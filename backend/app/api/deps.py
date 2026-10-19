@@ -38,7 +38,9 @@ async def load_adapter_and_name(
             status.HTTP_422_UNPROCESSABLE_ENTITY, "数据源密钥解密失败，请重新配置"
         ) from None
     try:
-        adapter = build_adapter(ds.type, ds.config_json, secret)
+        # cache_ns 传数据源 id：浏览类缓存（主机组/主机/监控项的清单与名称）
+        # 必须按数据源隔离，同一台 Zabbix 用不同 token 时可见范围不同
+        adapter = build_adapter(ds.type, ds.config_json, secret, cache_ns=ds.id)
     except ValueError as exc:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)

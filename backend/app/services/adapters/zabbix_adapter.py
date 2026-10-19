@@ -11,6 +11,8 @@ import httpx
 
 from app.config import get_settings
 from app.services.adapters.base import (
+    LIST_CHILDREN_TTL,
+    LIST_GROUPS_TTL,
     AdapterAPIError,
     AdapterAuthError,
     AdapterConnectionError,
@@ -31,8 +33,13 @@ class ZabbixAdapter(DataSourceAdapter):
     secret: API token 明文（由调用方解密后传入）。
     """
 
-    def __init__(self, config: dict[str, Any], secret: str | None = None) -> None:
-        super().__init__(config, secret)
+    def __init__(
+        self,
+        config: dict[str, Any],
+        secret: str | None = None,
+        cache_ns: Any = None,
+    ) -> None:
+        super().__init__(config, secret, cache_ns)
         settings = get_settings()
         url = str(config["url"]).rstrip("/")
         self._endpoint = (
@@ -142,6 +149,14 @@ class ZabbixAdapter(DataSourceAdapter):
         return True
 
     async def list_host_groups(self) -> list[dict[str, Any]]:
+        """主机组清单。TTL 5 分钟 —— 变更频率最低的一层。"""
+        return await self._cached_list(
+            ("host_groups",),
+            LIST_GROUPS_TTL,
+            self._fetch_host_groups,
+        )
+
+    async def _fetch_host_groups(self) -> list[dict[str, Any]]:
         result: list[dict[str, Any]] = await self._call(
             "hostgroup.get",
             {"output": ["groupid", "name"], "sortfield": "name"},
@@ -153,7 +168,7 @@ class ZabbixAdapter(DataSourceAdapter):
     async def list_hosts(
         self, group_ids: list[str], q: str | None = None
     ) -> list[dict[str, Any]]:
-        """按主机组列出主机。
+        """按主机组列出主机（TTL 2 分钟）。
 
         Zabbix 6.4+/7.x 中 host.get 取所属组必须用 selectHostGroups；
         旧参数 selectGroups 会静默返回空数组。
@@ -163,6 +178,16 @@ class ZabbixAdapter(DataSourceAdapter):
         """
         if not group_ids:
             raise AdapterAPIError(None, "list_hosts 需要 group_ids")
+        # 键里排序：host.get 对 groupids 的顺序不敏感，但调用方传进来的顺序可能不同，
+        # 不排序会把同一批主机拆成多个缓存条目
+        key = ("hosts", tuple(sorted(str(g) for g in group_ids)))
+        return await self._cached_list(
+            key,
+            LIST_CHILDREN_TTL,
+            lambda: self._fetch_hosts(group_ids),
+        )
+
+    async def _fetch_hosts(self, group_ids: list[str]) -> list[dict[str, Any]]:
         result: list[dict[str, Any]] = await self._call(
             "host.get",
             {
@@ -194,12 +219,24 @@ class ZabbixAdapter(DataSourceAdapter):
         host_ids: list[str],
         value_types: list[int] | None = None,
     ) -> list[dict[str, Any]]:
-        """按主机列出监控项，默认只取数值型（value_type 0/3）。
+        """按主机列出监控项，默认只取数值型（value_type 0/3）。TTL 2 分钟。
 
-        value_types 可传 query_config.value_type_override 覆盖默认过滤。
+        value_types 可传 query_config.value_type_override 覆盖默认过滤 ——
+        它参与缓存键，不同过滤口径不能共用同一份。
         """
         if not host_ids:
             raise AdapterAPIError(None, "list_items 需要 host_ids")
+        vts = tuple(value_types or NUMERIC_VALUE_TYPES)
+        key = ("items", tuple(sorted(str(h) for h in host_ids)), vts)
+        return await self._cached_list(
+            key,
+            LIST_CHILDREN_TTL,
+            lambda: self._fetch_items(host_ids, value_types),
+        )
+
+    async def _fetch_items(
+        self, host_ids: list[str], value_types: list[int] | None
+    ) -> list[dict[str, Any]]:
         params: dict[str, Any] = {
             "output": ["itemid", "name", "key_", "hostid", "value_type", "units"],
             "selectHosts": ["hostid", "name"],
