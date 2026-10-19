@@ -29,6 +29,21 @@ def _reset_runtime_config() -> Iterator[None]:
     runtime_config.reset_cache()
 
 
+@pytest.fixture(autouse=True)
+def _reset_adapter_list_cache() -> Iterator[None]:
+    """每个测试前后清空 Adapter 浏览类缓存。
+
+    浏览缓存是**进程内**的，测试之间不清理就会串味：上一个用例 respx 打的
+    响应被下一个用例命中，于是断言拿到上游根本不相关的旧数据
+    （实测test_items_q_filter 就是这样红的）。
+    """
+    from app.services.adapters.base import clear_list_cache  # noqa: PLC0415
+
+    clear_list_cache()
+    yield
+    clear_list_cache()
+
+
 @pytest.fixture
 def fake_user() -> User:
     """API 测试用的固定 admin 用户（dependency_overrides 注入，不触库）。"""

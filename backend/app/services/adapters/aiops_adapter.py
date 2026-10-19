@@ -46,6 +46,8 @@ import httpx
 
 from app.config import get_settings
 from app.services.adapters.base import (
+    LIST_CHILDREN_TTL,
+    LIST_GROUPS_TTL,
     AdapterAPIError,
     AdapterAuthError,
     AdapterConnectionError,
@@ -89,8 +91,6 @@ _STATUS_CACHE: dict[tuple[int, int], tuple[float, dict[str, list[str]], int]] = 
 _ITEM_META_CACHE: dict[tuple[int, int], tuple[float, dict[str, Any]]] = {}
 #: 模型 id -> 名称。list_hosts 要把「模型」塞进每个实例的 groups 里，
 #: 而模型名只有 list_host_groups 才拿得到，所以顺手缓存一份，省掉一次 RPC。
-_MODEL_NAMES: dict[int, str] = {}
-_MODEL_NAMES_AT: float = 0.0
 _CACHE_LOCK = threading.Lock()
 
 
@@ -172,8 +172,13 @@ class AIOpsAdapter(DataSourceAdapter):
 
     scope_kind = "model_instance"
 
-    def __init__(self, config: dict[str, Any], secret: str | None = None) -> None:
-        super().__init__(config, secret)
+    def __init__(
+        self,
+        config: dict[str, Any],
+        secret: str | None = None,
+        cache_ns: Any = None,
+    ) -> None:
+        super().__init__(config, secret, cache_ns)
         settings = get_settings()
         url = str(config["url"]).rstrip("/")
         # 允许配置到 /api 或只给站点根，两种都归一
@@ -181,6 +186,8 @@ class AIOpsAdapter(DataSourceAdapter):
         self._timeout = int(config.get("timeout") or settings.zabbix_default_timeout)
         self._verify_ssl = bool(config.get("verify_ssl", True))
         self._max_retries = int(config.get("max_retries") or settings.zabbix_max_retries)
+        #: 模型 id -> 名称。由 list_host_groups 整体填充（实例属性，不跨数据源共享）
+        self._model_names: dict[int, str] = {}
 
     # ------------------------------------------------------------------
     # HTTP
@@ -267,24 +274,33 @@ class AIOpsAdapter(DataSourceAdapter):
     # 三级浏览：模型 -> 实例 -> 监控项
     # ------------------------------------------------------------------
     async def list_host_groups(self) -> list[dict[str, Any]]:
-        """列出**开启了监控且有实例**的模型。
+        """列出**开启了监控且有实例**的模型（TTL 5 分钟）。"""
+        return await self._cached_list(
+            ("host_groups",),
+            LIST_GROUPS_TTL,
+            self._fetch_host_groups,
+        )
+
+    async def _fetch_host_groups(self) -> list[dict[str, Any]]:
+        """拉全量模型并过滤。
 
         两个过滤缺一不可（实测）：
         - ``monitor_switch=false`` 的模型没有监控项
         - ``monitor_switch=true`` 但 ``instance_num=0`` 的模型照样是空的
           （堡垒机 / IDS / IPS / 扫描仪 / VPN 等都是这类），不过滤会让用户
           选到一个点开什么都没有的模型
+
+        顺带把「模型 id -> 名称」记到 ``self._model_names``，供 list_hosts 回填
+        所属模型名。它是**实例属性**而非模块级全局：两个 AIOps 数据源的模型
+        清单不同，共用一份会出现「A 数据源的实例显示成B 数据源的模型名」。
         """
         data = await self._get(
             "/monitor/model/base/list", offset=0, limit=PAGE_LIMIT
         )
+        names: dict[int, str] = {}
         out: list[dict[str, Any]] = []
-        with _CACHE_LOCK:
-            _MODEL_NAMES.clear()
-            _MODEL_NAMES_AT = time.monotonic()
         for row in data.get("list") or []:
-            with _CACHE_LOCK:
-                _MODEL_NAMES[int(row["id"])] = str(row.get("name") or row["id"])
+            names[int(row["id"])] = str(row.get("name") or row["id"])
             if not row.get("monitor_switch"):
                 continue
             instance_num = int(row.get("instance_num") or 0)
@@ -298,19 +314,37 @@ class AIOpsAdapter(DataSourceAdapter):
                     "template_num": int(row.get("template_num") or 0),
                 }
             )
+        # 整体替换而不是逐条 merge：模型可能被删除/改名，半新半旧更难排查
+        self._model_names = names
         out.sort(key=lambda r: r["name"])
         return out
 
     async def list_hosts(
         self, group_ids: list[str], q: str | None = None
     ) -> list[dict[str, Any]]:
-        """按模型列出实例。
+        """按模型列出实例（TTL 2 分钟）。
 
         实例搜索参数名未在接口样本中确认，故策略是「先试服务端、失败则本地过滤并记住」
         （见 ``_SEARCH_PARAM_OK``），避免把未验证的参数名写死。
+
+        带 ``q`` 时**不走缓存** —— 缓存的是全量列表，而搜索是每次不同条件的
+        子集；按 q建缓存条目只会把全量复制 N 份、却对「输入一个字就变一次结果」
+        的搜索体验毫无帮助。
         """
         if not group_ids:
             raise AdapterAPIError(None, "list_hosts 需要 model_ids")
+        if q:
+            return await self._fetch_hosts(group_ids, q)
+        mids = tuple(sorted(int(g) if str(g).strip().isdigit() else str(g) for g in group_ids))
+        return await self._cached_list(
+            ("hosts", mids),
+            LIST_CHILDREN_TTL,
+            lambda: self._fetch_hosts(group_ids, None),
+        )
+
+    async def _fetch_hosts(
+        self, group_ids: list[str], q: str | None = None
+    ) -> list[dict[str, Any]]:
 
         out: list[dict[str, Any]] = []
         for raw_mid in group_ids:
@@ -407,9 +441,23 @@ class AIOpsAdapter(DataSourceAdapter):
 
         注意单位在 AIOps 是**列级**的（端口表的每一列单位不同），
         所以 ``units`` 恒为空串，真正的单位在 ``aiops_columns[].unit``。
+
+        TTL 2 分钟。``value_types`` 参与缓存键 —— 指标弹窗用不同口径请求过
+        （默认数值 / 编辑回显可能带 override），共用一份会串。
         """
         if not host_ids:
             raise AdapterAPIError(None, "list_items 需要 instance_ids")
+        vts = tuple(value_types or ())
+        key = ("items", tuple(sorted(str(h) for h in host_ids)), vts)
+        return await self._cached_list(
+            key,
+            LIST_CHILDREN_TTL,
+            lambda: self._fetch_items(host_ids, value_types),
+        )
+
+    async def _fetch_items(
+        self, host_ids: list[str], value_types: list[int] | None = None
+    ) -> list[dict[str, Any]]:
 
         out: list[dict[str, Any]] = []
         for raw_iid in host_ids:
@@ -945,10 +993,9 @@ async def _model_name(adapter: "AIOpsAdapter", model_id: int) -> str:
     求值注解**，直接写 ``AIOpsAdapter`` 会 NameError（本机 3.14 延迟求值不报，
     生产 3.11 报 —— 见 AGENTS.md §3.9，已栽过一次）。
     """
-    with _CACHE_LOCK:
-        hit = _MODEL_NAMES.get(model_id)
-    if hit:
-        return hit
-    await adapter.list_host_groups()
-    with _CACHE_LOCK:
-        return _MODEL_NAMES.get(model_id, f"模型 #{model_id}")
+    names = getattr(adapter, "_model_names", None)
+    if not names:
+        # 缓存未热（直接打 hosts 接口的情况：深链接、编辑回显）
+        await adapter.list_host_groups()
+        names = getattr(adapter, "_model_names", None) or {}
+    return names.get(model_id, f"模型 #{model_id}")

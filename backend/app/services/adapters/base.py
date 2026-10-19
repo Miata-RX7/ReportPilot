@@ -10,8 +10,91 @@
 - AdapterAPIError:        其他协议层错误（携带业务错误码）
 """
 
+import asyncio
+import threading
+import time
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import Any, Awaitable, Callable, Hashable
+
+# ---------------------------------------------------------------------------
+# 浏览类接口的进程内 TTL 缓存
+# ---------------------------------------------------------------------------
+#
+# 为什么需要：指标列表 / 编辑弹窗为了把 id 显示成名字，会同步调用 list_host_groups /
+# list_hosts / list_items。这些都是**低频变更的基础数据**（几百个实例、115 个模型），
+# 而一次列表请求要把两套数据源各打一遍，实测串起来 2.28 秒 —— 其中 99% 是等外部系统。
+# 缓存后重复打开是毫秒级。
+#
+# 只缓存「名称/清单」这类浏览结果，**不碰任何取数路径**
+#（fetch_trend_data / fetch_latest_value 各自已有独立缓存）。
+#
+# 缓存是进程内的：后端目前单容器，够用；将来多副本会退化成 N 倍调用，
+# 那时再换共享缓存（Redis），本文件的调用方无需改动。
+
+_LIST_CACHE: dict[tuple[Any, ...], tuple[float, Any]] = {}
+#: key -> 正在回源的 Future，用于 single-flight：同键并发只打一次上游
+_LIST_INFLIGHT: dict[tuple[Any, ...], "asyncio.Future[Any]"] = {}
+_LIST_CACHE_LOCK = threading.Lock()
+
+#: 主机组/模型：变更最慢，给最长的 TTL
+LIST_GROUPS_TTL = 300.0
+#: 主机/实例、监控项：变更稍快
+LIST_CHILDREN_TTL = 120.0
+
+
+async def _cached(
+    ns: Hashable,
+    key: tuple[Any, ...],
+    ttl: float,
+    factory: Callable[[], Awaitable[Any]],
+) -> Any:
+    """按 ``(ns, *key)`` 缓存 ``factory()`` 的结果，TTL 秒后失效。
+
+    ``ns`` 是数据源标识（数据源 id），避免两个数据源串用同一份缓存。
+
+    空列表/空 dict 也是合法结果，照样缓存 —— 否则上游「确实没有」时会每次都回源。
+
+    single-flight：缓存未命中且已有同键请求在飞时，直接等它的结果而不是再发一次。
+    否则并发场景下 N 个 buckets 会同时打出 N 个**完全相同**的请求，
+    并发化反而放大上游压力。
+    """
+    ck = (ns, *key)
+    now = time.monotonic()
+    with _LIST_CACHE_LOCK:
+        hit = _LIST_CACHE.get(ck)
+        if hit is not None and now - hit[0] < ttl:
+            return hit[1]
+        fut = _LIST_INFLIGHT.get(ck)
+        owner = fut is None
+        if owner:
+            fut = asyncio.get_running_loop().create_future()
+            _LIST_INFLIGHT[ck] = fut
+
+    if not owner:
+        # shield：等待方被取消时不要连带取消回源方的 Future
+        return await asyncio.shield(fut)
+
+    try:
+        value = await factory()
+    except BaseException as exc:
+        with _LIST_CACHE_LOCK:
+            _LIST_INFLIGHT.pop(ck, None)
+        if not fut.done():
+            fut.set_exception(exc)
+        fut.exception()  # 取出异常，避免「Future exception was never retrieved」
+        raise
+    with _LIST_CACHE_LOCK:
+        _LIST_CACHE[ck] = (time.monotonic(), value)
+        _LIST_INFLIGHT.pop(ck, None)
+    if not fut.done():
+        fut.set_result(value)
+    return value
+
+
+def clear_list_cache() -> None:
+    """清空浏览类缓存（数据源配置变更、排查问题时用）。"""
+    with _LIST_CACHE_LOCK:
+        _LIST_CACHE.clear()
 
 
 class AdapterError(Exception):
@@ -50,9 +133,29 @@ class DataSourceAdapter(ABC):
     #: calc_engine 据此选择读query_config 的哪一组字段。
     scope_kind: str = "host"
 
-    def __init__(self, config: dict[str, Any], secret: str | None = None) -> None:
+    def __init__(
+        self,
+        config: dict[str, Any],
+        secret: str | None = None,
+        cache_ns: Hashable = None,
+    ) -> None:
         self.config = config
         self._secret = secret
+        #: 浏览类缓存的命名空间。必须是**数据源身份**（数据源 id），不能是 url：
+        #: 两个数据源可能指向同一台 Zabbix 但用不同 token，可见范围不同，
+        #: 共用缓存会把一个数据源看不到的实例泄漏到另一个的下拉里。
+        #: 为 None（测试直接 new 出来的 adapter）时不走缓存之外的隔离逻辑，
+        #: 但仍会用它当键 —— 测试里各自传不同值即可。
+        self._cache_ns: Hashable = cache_ns if cache_ns is not None else id(self)
+
+    async def _cached_list(
+        self,
+        key: tuple[Any, ...],
+        ttl: float,
+        factory: Callable[[], Awaitable[Any]],
+    ) -> Any:
+        """本数据源命名空间下的浏览类缓存。子类用它包住 list_* 方法。"""
+        return await _cached(self._cache_ns, key, ttl, factory)
 
     @abstractmethod
     async def test_connection(self) -> bool:
