@@ -113,7 +113,6 @@ def _metric(
         type_config=type_config or {},
         calc_formula={"agg": "avg", "compare": "none"},
         unit="",
-        period_type="monthly",
         display_precision=display_precision,
     )
 

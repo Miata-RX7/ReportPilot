@@ -465,7 +465,6 @@ class _MetricCommon(BaseModel):
     # time 类型不取数 -> 不需要数据源；其余类型必填（见 _require_datasource）
     data_source_id: int | None = None
     unit: str = Field(default="", max_length=32)
-    period_type: Literal["monthly", "weekly", "daily"] = "monthly"
     display_precision: int | None = Field(default=None, ge=0, le=10)
     tags: list[str] = Field(default_factory=list)
     unit_config: UnitScaleConfig | None = None
@@ -579,7 +578,6 @@ class MetricUpdate(BaseModel):
     type_config: dict[str, Any] | None = None
     calc_formula: dict[str, Any] | None = None
     unit: str | None = Field(default=None, max_length=32)
-    period_type: Literal["monthly", "weekly", "daily"] | None = None
     display_precision: int | None = Field(default=None, ge=0, le=10)
     tags: list[str] | None = None
     # 传 {"mode": "none"} 关闭换算（None = 本次不修改，与其它字段语义一致）
@@ -600,7 +598,6 @@ class MetricDefinitionRead(BaseModel):
     type_config: dict[str, Any] = Field(default_factory=dict)
     calc_formula: CalcFormula
     unit: str
-    period_type: str
     display_precision: int | None
     tags: list[str]
     is_active: bool

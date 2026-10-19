@@ -94,7 +94,6 @@ async def create_metric(
         type_config=payload.type_config.model_dump(),
         calc_formula=(calc_formula.model_dump() if calc_formula is not None else {}),
         unit=payload.unit,
-        period_type=payload.period_type,
         display_precision=payload.display_precision,
         tags=payload.tags,
         unit_config=payload.unit_config.to_storage() if payload.unit_config else None,
@@ -300,7 +299,6 @@ def _to_read(metric: MetricDefinition) -> MetricDefinitionRead:
         type_config=metric.type_config or {},
         calc_formula=metric.calc_formula,
         unit=metric.unit,
-        period_type=metric.period_type,
         display_precision=metric.display_precision,
         tags=metric.tags or [],
         is_active=metric.is_active,
@@ -325,7 +323,6 @@ def _validate_stored_config(metric: MetricDefinition) -> None:
         "name": metric.name,
         "data_source_id": metric.data_source_id,
         "unit": metric.unit,
-        "period_type": metric.period_type,
         "display_precision": metric.display_precision,
         "tags": metric.tags or [],
         "metric_type": metric.metric_type or "scalar",
@@ -416,8 +413,6 @@ async def update_metric(
         metric.calc_formula = payload.calc_formula
     if payload.unit is not None:
         metric.unit = payload.unit
-    if payload.period_type is not None:
-        metric.period_type = payload.period_type
     if payload.display_precision is not None:
         metric.display_precision = payload.display_precision
     if payload.tags is not None:
