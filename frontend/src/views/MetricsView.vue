@@ -5,7 +5,7 @@ import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import { MoreFilled, QuestionFilled } from '@element-plus/icons-vue'
 
 import { confirmDelete } from '@/components/ConfirmDialog'
-import AiopsScopePicker from '@/components/AiopsScopePicker.vue'
+import AiopsScopePicker, { type CascaderSnapshot } from '@/components/AiopsScopePicker.vue'
 import DataTable from '@/components/DataTable.vue'
 import FormDialog from '@/components/FormDialog.vue'
 import PageHeader from '@/components/PageHeader.vue'
@@ -41,7 +41,7 @@ import {
 import type { TimeQuickOffset } from '@/api/types'
 import { useAuthStore } from '@/stores/auth'
 import { parseApiError } from '@/utils/error'
-import { type AiopsPick, buildPicksFromRefs, decodeRef, encodeRef } from '@/utils/aiopsRef'
+import { type AiopsPick, buildPicksFromRefs, columnLabel, decodeRef, encodeRef } from '@/utils/aiopsRef'
 import {
   changePctClass,
   factDisplayNumber,
@@ -194,6 +194,54 @@ const aiopsCandidates = ref<AiopsPick[]>([])
 
 /** AIOps 级联组件实例：曲线的三级级联要从它那里逐级取数据 */
 const aiopsPickerRef = ref<InstanceType<typeof AiopsScopePicker> | null>(null)
+
+/**
+ * 监控项 + 列的快照（由AiopsScopePicker emit）。
+ *
+ * 之所以不用 computed 直接调组件方法：那些方法读的是**组件内部**的响应式状态，
+ * 本文件的 computed 追踪不到，只会在挂载时算一次 —— 监控项加载完成后选项树
+ * 再也不更新，表现为「已配置的监控项不显示」。抛成快照就没这个问题。
+ */
+const aiopsCascaderItems = ref<CascaderSnapshot[]>([])
+
+/** 由快照构建级联选项树（行数据来自 aiopsRowsCache，不在快照里） */
+function buildCascaderTree(onlyText: boolean) {
+  return aiopsCascaderItems.value
+    .filter((i) => (onlyText ? !i.isNumber : true))
+    .map((i) => {
+      const base = {
+        value: i.item_id,
+        label: i.name,
+        tag: i.isList ? '表格' : onlyText ? '文本' : '数值',
+        raw: i.item_id,
+      }
+      // 简单项本身就是取数对象，可直接选中；表格项必须往下选列与行
+      if (!i.isList) return base
+      return {
+        ...base,
+        children: i.columns
+          .filter((c) =>
+            onlyText
+              ? !c.is_primary && c.value_type === 'text'
+              : !c.is_primary && c.value_type === 'number' && c.has_history,
+          )
+          .map((c) => {
+            const key = `${i.item_id}:${c.column_id}`
+            return {
+              value: String(c.column_id),
+              label: columnLabel(c),
+              raw: String(c.column_id),
+              children:
+                aiopsRowsCache.value[key]?.map((r) => ({
+                  value: r.value,
+                  label: r.label,
+                  hint: r.hint,
+                })) ?? [{ value: '__loading__', label: '加载中…' }],
+            }
+          }),
+      }
+    })
+}
 
 /** el-cascader lazy 的节点/上下文 —— 已改为非lazy 方案，此类型不再需要 */
 
@@ -765,33 +813,7 @@ function removeSeriesRow(idx: number) {
 /** 行数据缓存：key = <itemId>:<columnId> */
 const aiopsRowsCache = ref<Record<string, { value: string; label: string; hint?: string }[]>>({})
 
-const aiopsCascaderOptions = computed(() => {
-  const picker = aiopsPickerRef.value
-  if (!picker) return []
-  const rowsKey = (itemId: string, columnId: string) => `${itemId}:${columnId}`
-  return picker.cascaderItems().map((it) => {
-    if (it.selectable) {
-      return { value: it.value, label: it.label, tag: it.tag, raw: it.value }
-    }
-    return {
-      value: it.value,
-      label: it.label,
-      tag: it.tag,
-      raw: it.value,
-      children: picker.cascaderColumns(it.value).map((c) => ({
-        value: c.value,
-        label: c.label,
-        raw: c.value,
-        __rowsKey: rowsKey(it.value, c.value),
-        children: aiopsRowsCache.value[rowsKey(it.value, c.value)]?.map((r) => ({
-          value: r.value,
-          label: r.label,
-          hint: r.hint,
-        })) ?? [{ value: '__loading__', label: '加载中…' }],
-      })),
-    }
-  })
-})
+const aiopsCascaderOptions = computed(() => buildCascaderTree(false))
 
 /** 点开某列时拉真实行，替换掉占位节点 */
 /**
@@ -806,16 +828,15 @@ async function prefetchAiopsRows(): Promise<void> {
   if (!picker) return
   const jobs: Promise<void>[] = []
   // 数值/曲线用数值列，文本用 text 列 —— 两套都要预取，否则切类型时又变「加载中」
-  const modes = [false, true] as const
-  for (const onlyText of modes) {
-    for (const it of picker.cascaderItems({ onlyText })) {
-      if (it.selectable) continue
-      for (const c of picker.cascaderColumns(it.value, { onlyText })) {
-      const key = `${it.value}:${c.value}`
+  for (const it of aiopsCascaderItems.value) {
+    if (!it.isList) continue
+    for (const c of it.columns) {
+      if (c.is_primary) continue
+      const key = `${it.item_id}:${c.column_id}`
       if (aiopsRowsCache.value[key]) continue
       jobs.push(
         picker
-          .cascaderRows(it.value, c.value)
+          .cascaderRows(it.item_id, String(c.column_id))
           .then((rows) => {
             aiopsRowsCache.value = { ...aiopsRowsCache.value, [key]: rows }
           })
@@ -824,7 +845,6 @@ async function prefetchAiopsRows(): Promise<void> {
           }),
       )
     }
-  }
   }
   await Promise.all(jobs)
 }
@@ -924,34 +944,8 @@ function onAiopsTextChange(path: unknown): void {
   aiopsTextRef.value = itemId ? (encodeRef(inst, itemId, picked[1], picked[2]) ?? '') : ''
 }
 
-/** 文本型专用选项树：文本类监控项 + 表格里的 text 列（行同样来自 aiopsRowsCache） */
-const aiopsTextCascaderOptions = computed(() => {
-  const picker = aiopsPickerRef.value
-  if (!picker) return []
-  return picker.cascaderItems({ onlyText: true }).map((it) => {
-    if (it.selectable) return { value: it.value, label: it.label, tag: it.tag, raw: it.value }
-    return {
-      value: it.value,
-      label: it.label,
-      tag: it.tag,
-      raw: it.value,
-      children: picker.cascaderColumns(it.value, { onlyText: true }).map((c) => {
-        const key = `${it.value}:${c.value}`
-        return {
-          value: c.value,
-          label: c.label,
-          raw: c.value,
-          children:
-            aiopsRowsCache.value[key]?.map((r) => ({
-              value: r.value,
-              label: r.label,
-              hint: r.hint,
-            })) ?? [{ value: '__loading__', label: '加载中…' }],
-        }
-      }),
-    }
-  })
-})
+/** 文本型专用选项树：文本类监控项 + 表格里的 text 列 */
+const aiopsTextCascaderOptions = computed(() => buildCascaderTree(true))
 
 function onSeriesItemChange(row: { item_id: string; display_name: string }) {
   // 选中 item 时用 item 名称预填 display_name（用户可再改）
@@ -1749,6 +1743,7 @@ onMounted(load)
           @update:instance-ids="form.instance_ids = $event"
           @update:picks="aiopsPicks = $event"
           @update:candidates="aiopsCandidates = $event"
+          @update:cascader-items="aiopsCascaderItems = $event"
           @scope-change="onAiopsScopeChange"
         />
 
