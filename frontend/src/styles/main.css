@@ -86,3 +86,21 @@ body {
   color: var(--code-text);
   background-color: var(--code-bg);
 }
+
+/*
+ * 下拉类控件：点击标签不再展开菜单
+ *
+ * Element Plus 的 el-form-item 会给 <label> 渲染 for=…，指向内部控件。
+ * 于是点标签、或点标签旁边那段空白（.el-form-item__label 的剩余区域），
+ * 浏览器会当作激活了那个控件 —— 对下拉框就表现为「点标签弹出菜单」，
+ * 而点空白处展开尤其反直觉（用户反馈 2026-10-19）。
+ *
+ * pointer-events: none 让点击穿透，label 只保留视觉呈现。
+ * 只作用于下拉类控件：文本框/数字框点标签聚焦是常见且好用的行为，不该动。
+ * :has() 需要 Chrome 105+ / Safari 15.4+，本项目目标浏览器已满足。
+ */
+.el-form-item:has(.el-select) > .el-form-item__label,
+.el-form-item:has(.el-cascader) > .el-form-item__label,
+.el-form-item:has(.el-date-editor) > .el-form-item__label {
+  pointer-events: none;
+}
