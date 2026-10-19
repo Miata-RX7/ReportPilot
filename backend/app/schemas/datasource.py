@@ -93,15 +93,6 @@ class AIOpsColumn(BaseModel):
     is_primary: bool
 
 
-class ItemRowsBulk(BaseModel):
-    """list 型监控项**全部列**的行（一次请求拿全，省掉按列逐个请求）。
-
-    columns 的 key 是列 id 的字符串；没有数据行的列不会出现在 map 里。
-    """
-
-    columns: dict[str, list[ItemRowRef]] = Field(default_factory=dict)
-
-
 class ItemRowRef(BaseModel):
     """list 型监控项的一个主键行。
 
@@ -112,6 +103,15 @@ class ItemRowRef(BaseModel):
     row_key: str
     current_value: str = ""
     as_of: int = 0
+
+
+class ItemRowsBulk(BaseModel):
+    """list 型监控项**全部列**的行（一次请求拿全，省掉按列逐个请求）。
+
+    columns 的 key 是列 id 的字符串；没有数据行的列不会出现在 map 里。
+    """
+
+    columns: dict[str, list[ItemRowRef]] = Field(default_factory=dict)
 
 
 class ItemRef(BaseModel):
