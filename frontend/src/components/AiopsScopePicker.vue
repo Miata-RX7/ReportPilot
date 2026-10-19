@@ -77,6 +77,28 @@ const emit = defineEmits<{
   'update:cascaderItems': [value: CascaderSnapshot[]]
 }>()
 
+/* ------------------------------------------------------------ 会话内缓存 */
+
+/**
+ * 会话内缓存，对齐 MetricsView 里 Zabbix 的三个 Map。
+ *
+ * 模型 115 条、几乎不变，实例也就几百条 —— 每次打开弹窗都重拉一遍纯属浪费，
+ * 而且用户能明显感到「打开要先等一下」。
+ *
+ * 只缓存**只读且慢**的三级；主键行（行会变、且已由后端缓存 60s）不重复缓存。
+ */
+const modelsCache = new Map<number, HostGroupRef[]>()
+const instancesCache = new Map<string, HostRef[]>()
+const itemsCache = new Map<string, ItemRef[]>()
+
+/** 实例增删不频繁，但保险起见给缓存一个上限，避免长时间会话无限增长 */
+const MAX_CACHE_ENTRIES = 64
+
+function cacheSet<T>(cache: Map<string, T>, key: string, value: T): void {
+  if (cache.size >= MAX_CACHE_ENTRIES) cache.clear()
+  cache.set(key, value)
+}
+
 const modelOptions = ref<HostGroupRef[]>([])
 const instanceOptions = ref<HostRef[]>([])
 const itemOptions = ref<ItemRef[]>([])
@@ -133,10 +155,17 @@ function buildCurrentPicks(): AiopsPick[] {
 
 async function loadModels() {
   if (props.datasourceId === null) return
+  const cached = modelsCache.get(props.datasourceId)
+  if (cached) {
+    modelOptions.value = [...cached]
+    return
+  }
   loadingModels.value = true
   loadError.value = ''
   try {
-    modelOptions.value = (await dataSourceApi.listHostGroups(props.datasourceId)).data
+    const data = (await dataSourceApi.listHostGroups(props.datasourceId)).data
+    modelsCache.set(props.datasourceId, data)
+    modelOptions.value = data
   } catch {
     loadError.value = '模型列表加载失败，请检查数据源连通性'
   } finally {
@@ -146,10 +175,20 @@ async function loadModels() {
 
 async function loadInstances(modelId: string, keyword?: string) {
   if (props.datasourceId === null || !modelId) return
+  // 带搜索词时不走缓存（缓存的是全量）
+  const key = `${props.datasourceId}:${modelId}`
+  if (!keyword) {
+    const cached = instancesCache.get(key)
+    if (cached) {
+      instanceOptions.value = [...cached]
+      return
+    }
+  }
   loadingInstances.value = true
   try {
     const { data } = await dataSourceApi.listHosts(props.datasourceId, [modelId], keyword)
     instanceOptions.value = data
+    if (!keyword) cacheSet(instancesCache, key, data)
   } catch {
     loadError.value = '实例列表加载失败'
   } finally {
@@ -161,10 +200,18 @@ async function loadItems(instanceId: string) {
   if (props.datasourceId === null || !instanceId) return
   loadingItems.value = true
   try {
+    const key = `${props.datasourceId}:${instanceId}`
+    const cached = itemsCache.get(key)
+    if (cached) {
+      itemOptions.value = [...cached]
+      return
+    }
     const { data } = await dataSourceApi.listItems(props.datasourceId, [instanceId])
     // 在入口统一过滤 log_* 并排序：下游所有取数路径（级联、文本下拉）都受益，
     // 不会出现「级联里没有、文本下拉里却有」的割裂
-    itemOptions.value = sortItems(data.filter((i) => !isHiddenItem(i)))
+    const list = sortItems(data.filter((i) => !isHiddenItem(i)))
+    itemsCache.set(key, list)
+    itemOptions.value = list
     if (!data.length) loadError.value = '该实例没有任何监控项，请换一个实例'
     else if (loadError.value.startsWith('该实例')) loadError.value = ''
   } catch {
@@ -381,25 +428,28 @@ function cascaderColumns(itemId: string, opts?: { onlyText?: boolean }): Cascade
     }))
 }
 
-/** 第 3 级：主键列每一行的具体值（后端已按「当前值非空即有历史」过滤）。 */
-async function cascaderRows(itemId: string, columnId: string): Promise<CascaderNode[]> {
+/** 第 3 级：主键列每一行的具体值。**批量取全列**，一个监控项只发一次请求。 */
+async function cascaderRowsBulk(itemId: string): Promise<Record<string, CascaderNode[]>> {
   const inst = selectedInstanceId.value
-  if (!inst || props.datasourceId === null) return []
+  if (!inst || props.datasourceId === null) return {}
   try {
-    const { data } = await dataSourceApi.listItemRows(
+    const { data } = await dataSourceApi.listItemRowsBulk(
       props.datasourceId,
       inst,
       itemId,
-      columnId,
     )
-    return data.map((r) => ({
-      value: r.row_key,
-      raw: r.row_key,
-      label: r.row_key,
-      hint: r.current_value,
-    }))
+    const out: Record<string, CascaderNode[]> = {}
+    for (const [col, rows] of Object.entries(data.columns)) {
+      out[col] = rows.map((r) => ({
+        value: r.row_key,
+        raw: r.row_key,
+        label: r.row_key,
+        hint: r.current_value,
+      }))
+    }
+    return out
   } catch {
-    return []
+    return {}
   }
 }
 watch(candidates, (v) => emit('update:candidates', v), { immediate: true, deep: true })
@@ -469,7 +519,7 @@ watch(
   { deep: true, immediate: true },
 )
 
-defineExpose({ plainItemAllowed, cascaderItems, cascaderColumns, cascaderRows })
+defineExpose({ plainItemAllowed, cascaderItems, cascaderColumns, cascaderRowsBulk })
 </script>
 
 <template>

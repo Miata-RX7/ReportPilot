@@ -22,7 +22,7 @@ withDefaults(
     total: 0,
     pagination: false,
     page: 1,
-    pageSize: 20,
+    pageSize: 10,
     emptyText: '暂无数据',
   },
 )
@@ -57,11 +57,13 @@ const emit = defineEmits<{
 
       <div v-if="pagination" class="data-table__pager">
         <el-pagination
-          layout="total, prev, pager, next"
+          layout="total, sizes, prev, pager, next, jumper"
           :total="total"
           :current-page="page"
           :page-size="pageSize"
+          :page-sizes="[10, 20, 50, 100]"
           @current-change="(v: number) => emit('update:page', v)"
+          @size-change="(v: number) => emit('update:pageSize', v)"
         />
       </div>
     </el-card>

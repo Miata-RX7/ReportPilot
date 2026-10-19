@@ -35,6 +35,7 @@ async def list_push_records(
     ),
     keyword: str | None = Query(default=None, description="报告 id（精确）或周期（模糊）"),
     limit: int = Query(default=50, ge=1, le=MAX_LIMIT),
+    offset: int = Query(default=0, ge=0, description="分页偏移；不传行为不变"),
     db: AsyncSession = Depends(get_db),
     _: User = Depends(get_current_user),
 ) -> PushRecordList:
@@ -69,7 +70,7 @@ async def list_push_records(
     total = int(await db.scalar(count_stmt) or 0)
     rows = (
         await db.execute(
-            stmt.order_by(PushRecord.created_at.desc(), PushRecord.id.desc()).limit(limit)
+            stmt.order_by(PushRecord.created_at.desc(), PushRecord.id.desc()).limit(limit).offset(offset)
         )
     ).all()
 

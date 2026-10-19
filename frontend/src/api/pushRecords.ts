@@ -37,6 +37,8 @@ export interface PushRecordQuery {
   action?: PushRecordAction | null
   keyword?: string | null
   limit?: number
+  /** 分页偏移；不传则由后端返回前 limit 条 */
+  offset?: number
 }
 
 export const pushRecordApi = {

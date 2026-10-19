@@ -34,6 +34,14 @@ import {
 } from '@/utils/template'
 
 const rows = ref<TemplateListItem[]>([])
+/** 分页：后端模板列表返回全量（当前 3 条），前端切片即可 */
+const page = ref(1)
+const pageSize = ref(10)
+
+const pagedRows = computed(() => {
+  const start = (page.value - 1) * pageSize.value
+  return rows.value.slice(start, start + pageSize.value)
+})
 const metrics = ref<MetricDefinitionRead[]>([])
 const loading = ref(false)
 
@@ -339,7 +347,17 @@ onMounted(load)
       </template>
     </PageHeader>
 
-    <DataTable :data="rows" :loading="loading" empty-text="暂无模板，点击右上角上传">
+    <DataTable
+      :data="pagedRows"
+      :loading="loading"
+      empty-text="暂无模板，点击右上角上传"
+      pagination
+      :total="rows.length"
+      :page="page"
+      :page-size="pageSize"
+      @update:page="(v: number) => (page = v)"
+      @update:page-size="(v: number) => { pageSize = v; page = 1 }"
+    >
       <template #columns>
         <el-table-column prop="name" label="模板名" min-width="160" />
         <el-table-column label="属主" width="120">

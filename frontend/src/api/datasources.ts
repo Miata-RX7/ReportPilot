@@ -8,6 +8,7 @@ import type {
   HostRef,
   ItemRef,
   ItemRowRef,
+  ItemRowsBulk,
   PieSuitability,
   PieSuitabilityRequest,
 } from './types'
@@ -61,6 +62,15 @@ export const dataSourceApi = {
   listItemRows(id: number, instanceId: string, itemId: string, columnId: string) {
     return http.get<ItemRowRef[]>(`/datasources/${id}/item-rows`, {
       params: { instance_id: instanceId, item_id: itemId, column_id: columnId },
+    })
+  },
+  /**
+   * 一次取回list 型监控项**所有列**的主键行。
+   * 后端同样走 status 接口（一次返回全部列），比按列逐个请求少 N-1 次。
+   */
+  listItemRowsBulk(id: number, instanceId: string, itemId: string) {
+    return http.get<ItemRowsBulk>(`/datasources/${id}/item-rows/bulk`, {
+      params: { instance_id: instanceId, item_id: itemId },
     })
   },
 }
