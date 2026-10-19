@@ -274,12 +274,14 @@ onMounted(load)
             <el-option label="Zabbix" value="zabbix" />
             <el-option label="AIOps" value="aiops" />
           </el-select>
-          <div class="form-hint">
-            <template v-if="editingId !== null">
-              类型创建后不可改：已绑定指标的取数配置是按类型存的（Zabbix 是主机组/主机 + 数字
-              item_id，AIOps 是模型/实例 + 定位串），改类型会让它们全部失效。需要换类型请新建数据源。
-            </template>
-            <template v-else-if="form.type === 'aiops'">
+          <!--
+            编辑态不显示任何提示：类型虽然被禁用（后端 DataSourceUpdate 没有 type
+            字段，改了也不会生效，且已绑定指标的取数配置是按类型存的），但一大段
+            解释文字反而喧宾夺主 —— 禁用态本身已经表达了「这里不能动」
+            （用户 2026-10-19 要求去掉）。新建态仍按类型给出接入方式说明。
+          -->
+          <div v-if="editingId === null" class="form-hint">
+            <template v-if="form.type === 'aiops'">
               取数层级为「模型 → 实例 → 监控项 → 列 → 主键行」；不支持饼图
             </template>
             <template v-else>JSON-RPC over HTTP，凭据放在 Authorization 头</template>
