@@ -100,6 +100,15 @@ describe('buildCurveOption 坐标轴可读性', () => {
     expect(opt.xAxis.type).toBe('time')
     expect(opt.xAxis.axisLabel.hideOverlap).toBe(true)
   })
+
+  // 回归：曾写成 '{MM}-{DD}'，而 ECharts 的「日」token 是小写 {dd}，
+  // {DD} 不是合法 token，会被原样输出成 "09-{DD}"
+  it('x 轴标签用合法的 ECharts 时间 token', () => {
+    const opt = buildCurveOption({ series: [] }) as any
+    const f = opt.xAxis.axisLabel.formatter
+    expect(f).toBe('{MM}-{dd}')
+    expect(String(f)).not.toMatch(/\{DD\}/)
+  })
 })
 
 

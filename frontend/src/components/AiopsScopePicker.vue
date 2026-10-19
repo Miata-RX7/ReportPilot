@@ -24,6 +24,17 @@ import {
   picksToSelections,
 } from '@/utils/aiopsRef'
 
+/** 级联用的监控项快照（item + 列元数据）。 */
+export interface CascaderSnapshot {
+  item_id: string
+  name: string
+  /** 表格类（要继续往下选列与行） */
+  isList: boolean
+  /** 数值类（本身即可取数对象） */
+  isNumber: boolean
+  columns: AiopsColumn[]
+}
+
 /** 曲线配置的三级级联节点（el-cascader lazy 的数据结构）。 */
 interface CascaderNode {
   value: string
@@ -62,6 +73,8 @@ const emit = defineEmits<{
   'scope-change': []
   /** 当前实例下所有可选的取数对象（曲线的「曲线配置」用它渲染下拉） */
   'update:candidates': [value: AiopsPick[]]
+  /** 监控项+列的快照：父组件据此重算级联选项（见 cascaderSnapshot 的说明） */
+  'update:cascaderItems': [value: CascaderSnapshot[]]
 }>()
 
 const modelOptions = ref<HostGroupRef[]>([])
@@ -304,6 +317,26 @@ function sortItems(items: ItemRef[]): ItemRef[] {
     return (a.name ?? '').localeCompare(b.name ?? '', 'zh-Hans-CN')
   })
 }
+
+/**
+ * 把监控项与列元数据**快照**抛给父组件。
+ *
+ * 为什么不用 expose + 父组件 computed 直接调：itemOptions 是**组件内部**的响应式状态，
+ * 父组件的 computed 追踪不到它 —— 只会在 picker 挂载那一刻算一次，之后监控项加载
+ * 完成也不重算，结果就是「级联里永远没选项、已配置的项显示不出来」（实测踩过）。
+ * 抛成快照后父组件 ref 变化就能正确重算。
+ */
+const cascaderSnapshot = computed(() =>
+  sortItems(itemOptions.value).map((i) => ({
+    item_id: i.item_id,
+    name: i.name,
+    isList: i.aiops_data_type === 'list',
+    isNumber: i.aiops_data_type === 'number',
+    columns: columnsOf(i).map((c) => ({ ...c })),
+  })),
+)
+
+watch(cascaderSnapshot, (v) => emit('update:cascaderItems', v), { immediate: true })
 
 /**
  * 第 1 级：监控项（标注「数值」/「表格」/「文本」）。
@@ -637,9 +670,6 @@ defineExpose({ plainItemAllowed, cascaderItems, cascaderColumns, cascaderRows })
       </div>
     </el-form-item>
     </template>
-    <div v-else class="form-hint curve-hint">
-      {{ metricType === 'curve' ? '曲线图' : '数值' }}类型请在下方用三级级联选择「监控项 / 列 / 行」
-    </div>
   </div>
 </template>
 

@@ -46,7 +46,9 @@ export function buildCurveOption(input: CurveOptionInput): Record<string, unknow
     xAxis: {
       // time 轴：多序列时间戳可能不对齐，category 轴会误导
       type: 'time',
-      axisLabel: { formatter: '{MM}-{DD}', hideOverlap: true },
+      // ECharts 时间模板的 token 是 {yyyy}/{MM}/{dd}… —— 「日」是小写 dd，
+      // 写成 {DD} 不是合法 token，会被原样输出成 "09-{DD}"（实测踩过）
+      axisLabel: { formatter: '{MM}-{dd}', hideOverlap: true },
     },
     yAxis: {
       type: 'value',
