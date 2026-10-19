@@ -15,6 +15,7 @@ import { computed, ref, watch } from 'vue'
 
 import { dataSourceApi } from '@/api/datasources'
 import type { HostGroupRef, HostRef, ItemRef, ItemRowRef } from '@/api/types'
+import { aiopsInstancesCache, aiopsItemsCache, aiopsModelsCache } from '@/utils/aiopsBrowseCache'
 import {
   type AiopsColumn,
   type AiopsPick,
@@ -87,9 +88,13 @@ const emit = defineEmits<{
  *
  * 只缓存**只读且慢**的三级；主键行（行会变、且已由后端缓存 60s）不重复缓存。
  */
-const modelsCache = new Map<number, HostGroupRef[]>()
-const instancesCache = new Map<string, HostRef[]>()
-const itemsCache = new Map<string, ItemRef[]>()
+// 缓存本体在 utils/aiopsBrowseCache（**模块作用域**）——
+// `<script setup>` 的顶层代码跑在 setup() 内，写 new Map() 会每个组件实例
+// 新建一个空 Map，弹窗每次打开都是新实例，缓存永远不命中。
+// 这里只是给模块缓存起本地名字，下面的读写逻辑不用改。
+const modelsCache = aiopsModelsCache
+const instancesCache = aiopsInstancesCache
+const itemsCache = aiopsItemsCache
 
 /** 实例增删不频繁，但保险起见给缓存一个上限，避免长时间会话无限增长 */
 const MAX_CACHE_ENTRIES = 64
@@ -155,7 +160,7 @@ function buildCurrentPicks(): AiopsPick[] {
 
 async function loadModels() {
   if (props.datasourceId === null) return
-  const cached = modelsCache.get(props.datasourceId)
+  const cached = modelsCache.get(String(props.datasourceId))
   if (cached) {
     modelOptions.value = [...cached]
     return
@@ -164,7 +169,7 @@ async function loadModels() {
   loadError.value = ''
   try {
     const data = (await dataSourceApi.listHostGroups(props.datasourceId)).data
-    modelsCache.set(props.datasourceId, data)
+    modelsCache.set(String(props.datasourceId), data)
     modelOptions.value = data
   } catch {
     loadError.value = '模型列表加载失败，请检查数据源连通性'

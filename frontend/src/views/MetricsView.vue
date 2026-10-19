@@ -549,7 +549,6 @@ async function openEdit(row: MetricDefinitionRead) {
     pie_unknown_mode: row.type_config?.pie_config?.unknown_mode ?? 'exclude',
     pie_ack_risk: false,
   })
-  dialogVisible.value = true
   formRef.value?.clearValidate()
 
   // 详情带回 id + 名称（避免逐级反查多次）
@@ -584,8 +583,6 @@ async function openEdit(row: MetricDefinitionRead) {
   aiopsScalarRefs.value = [...(row.query_config.item_ids ?? [])]
   // 文本型单选用同一个数组的第一项
   aiopsTextRef.value = form.metric_type === 'text' ? (row.query_config.item_ids?.[0] ?? '') : ''
-  // 文本型单选用同一个数组的第一项
-  aiopsTextRef.value = form.metric_type === 'text' ? (row.query_config.item_ids?.[0] ?? '') : ''
   // 曲线的取数对象与展示名/数值变换都存在 series 里，一并回填
   form.series = (row.query_config.series ?? []).map((s) => {
     const one = s as { item_id?: string; display_name?: string; transform?: { mul?: number; add?: number } }
@@ -600,6 +597,7 @@ async function openEdit(row: MetricDefinitionRead) {
   // 时间类型不取数：回填时间配置即可，不需要拉取主机组/主机/监控项
   if (form.metric_type === 'time') {
     fillTimeConfig(row.type_config as Record<string, unknown> | undefined)
+    dialogVisible.value = true
     return
   }
 
@@ -608,12 +606,14 @@ async function openEdit(row: MetricDefinitionRead) {
     // AIOps 的模型 / 实例 / 监控项由 AiopsScopePicker 自己按需加载，
     // 这里不要抢跑（抢跑会把它的内部状态与本表单的 scope 搅在一起）
     mergeResolved(resolved)
+    dialogVisible.value = true
     return
   }
   await loadGroups(id)
   if (form.host_group_ids.length) await loadHosts(id, form.host_group_ids)
   if (form.host_ids.length) await loadItems(id, form.host_ids)
   mergeResolved(resolved)
+  dialogVisible.value = true
 }
 
 /** 把详情解析出的名称补进下拉选项（缓存里没有的 id 也要能显示名称） */
