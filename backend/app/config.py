@@ -67,7 +67,12 @@ class Settings(BaseSettings):
     onlyoffice_internal_url: str = ""
     onlyoffice_jwt_secret: str = ""
     public_base_url: str = ""
-    editor_token_ttl_seconds: int = 600  # 文件/回调一次性 token 有效期
+    editor_token_ttl_seconds: int = 600  # 文件下载一次性 token 有效期
+    # 回调 token 单独设长有效期：ONLYOFFICE 在打开编辑器时拿到回调地址，
+    # 可能编辑几十分钟才回调一次。沿用 600s 会让长编辑的保存被静默丢弃
+    # （界面显示「已保存」但平台收不到内容、不生成新版本）。
+    # 安全性不变：回调还要过 body 的 JWT 签名校验。
+    editor_callback_token_ttl_seconds: int = 86400  # 回调 token 有效期（24h）
 
     # ---- 报告任务 / 确认流程 ----
     # APP_BASE_URL：**浏览器与邮件可达**的对外地址，用于拼确认链接。
