@@ -74,6 +74,28 @@ def verify_token(token: str) -> dict[str, Any] | None:
     return body
 
 
+def is_expired_token(token: str) -> bool:
+    """只验签与过期，不做业务校验 —— 用于把 403 归因成「过期」还是「非法」。
+
+    验签失败返回 False（不是过期）；验签通过但 exp 已过返回 True。
+    """
+    try:
+        raw_b64, sig_b64 = token.split(".")
+        pad = lambda s: s + "=" * (-len(s) % 4)  # noqa: E731
+        raw = base64.urlsafe_b64decode(pad(raw_b64))
+        sig = base64.urlsafe_b64decode(pad(sig_b64))
+    except Exception:
+        return False
+    expected = hmac.new((TOKEN_NS + _secret()).encode(), raw, hashlib.sha256).digest()
+    if not hmac.compare_digest(sig, expected):
+        return False
+    try:
+        body = json.loads(raw)
+    except Exception:
+        return False
+    return int(body.get("exp", 0)) < int(time.time())
+
+
 def file_url(template_id: int, version_id: int) -> str:
     base = get_settings().public_base_url.rstrip("/")
     token = sign_token({"t": template_id, "v": version_id, "k": "file"})
@@ -81,8 +103,23 @@ def file_url(template_id: int, version_id: int) -> str:
 
 
 def callback_url(template_id: int, version_id: int, user_id: int) -> str:
+    """ONLYOFFICE 保存回调地址。
+
+    回调 token 的有效期**独立于文件下载 token**：
+    - 文件下载 token 短（600s）是对的 —— 它是防直链盗用的凭证
+    - 回调 token 必须长：ONLYOFFICE 在**打开编辑器时**拿到这个地址，之后可能
+      编辑几十分钟才回调一次。沿用 600s 的话，长编辑的保存会被 403 静默丢弃
+      —— 界面仍显示「所有更改已保存」，但平台收不到内容、不生成新版本
+      （2026-10-20 线上实测：11:34 之后的回调全部 403）。
+
+    安全性未降低：回调仍要过 body 里的 JWT 签名校验（verify_callback_jwt），
+    token 里的 t/u 也要与当前模板、操作者对得上。
+    """
     base = get_settings().public_base_url.rstrip("/")
-    token = sign_token({"t": template_id, "v": version_id, "u": user_id, "k": "cb"})
+    token = sign_token(
+        {"t": template_id, "v": version_id, "u": user_id, "k": "cb"},
+        ttl=get_settings().editor_callback_token_ttl_seconds,
+    )
     return f"{base}/api/templates/{template_id}/callback?token={token}"
 
 

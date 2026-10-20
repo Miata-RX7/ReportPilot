@@ -20,6 +20,50 @@ def test_sign_verify_roundtrip() -> None:
 def test_verify_tampered_or_garbage() -> None:
     token = onlyoffice_service.sign_token({"t": 1})
     assert onlyoffice_service.verify_token(token + "x") is None
+
+
+def test_callback_token_lifetime_is_longer_than_file_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """回调 token 有效期必须显著长于文件下载 token。
+
+    回归（2026-10-20 线上）：回调 token 沿用 600s，编辑超过 10 分钟后 ONLYOFFICE
+    的保存回调全部 403 —— 界面显示「所有更改已保存」，但平台收不到内容、
+    不生成新版本。文件下载 token 保持短是对的（防直链盗用），两者要分开。
+    """
+    settings = get_settings()
+    assert settings.editor_callback_token_ttl_seconds > settings.editor_token_ttl_seconds
+    assert settings.editor_callback_token_ttl_seconds >= 3600, (
+        "回调 token 至少要 1 小时，否则长编辑仍会丢保存"
+    )
+
+
+def test_callback_url_token_outlives_file_url_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """实打实签两个 token 比 exp：回调的必须显著更晚过期。"""
+    monkeypatch.setattr(get_settings(), "public_base_url", "http://backend:8000")
+    monkeypatch.setattr(get_settings(), "editor_token_ttl_seconds", 600)
+    monkeypatch.setattr(get_settings(), "editor_callback_token_ttl_seconds", 86400)
+    cb = onlyoffice_service.callback_url(19, 3, 2)
+    fl = onlyoffice_service.file_url(19, 3)
+    cb_exp = onlyoffice_service.verify_token(cb.split("token=")[1])["exp"]
+    fl_exp = onlyoffice_service.verify_token(fl.split("token=")[1])["exp"]
+    assert cb_exp - fl_exp >= 3600, "回调 token 应至少比文件 token 多活 1 小时"
+
+
+def test_is_expired_token_distinguishes_expiry_from_tampering() -> None:
+    """403 要能归因成「过期」还是「非法」，否则线上只能靠猜。"""
+    live = onlyoffice_service.sign_token({"t": 1, "k": "cb"})
+    assert onlyoffice_service.is_expired_token(live) is False
+
+    expired = onlyoffice_service.sign_token({"t": 1, "k": "cb"}, ttl=-10)
+    assert onlyoffice_service.verify_token(expired) is None
+    assert onlyoffice_service.is_expired_token(expired) is True
+
+    # 签名被篡改：既不是过期，也不是合法 token
+    assert onlyoffice_service.is_expired_token(live + "x") is False
+    assert onlyoffice_service.is_expired_token("garbage") is False
     assert onlyoffice_service.verify_token("garbage") is None
     assert onlyoffice_service.verify_token("") is None
 

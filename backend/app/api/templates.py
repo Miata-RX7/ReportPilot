@@ -447,6 +447,16 @@ async def onlyoffice_callback(
     tpl = await _get_or_404(db, tpl_id)
     payload = onlyoffice_service.verify_token(token)
     if not payload or payload.get("k") != "cb" or payload.get("t") != tpl_id:
+        # 403 只有 access log 时根本发现不了（混在大量 200 里），必须单独告警：
+        # 「过期」说明编辑会话开太久、内容没保存上；「非法」才是 token 被篡改。
+        if onlyoffice_service.is_expired_token(token):
+            logger.warning(
+                "ONLYOFFICE 回调 token 已过期，保存内容未落盘 template_id=%d"
+                "（编辑会话可能超过 token 有效期）",
+                tpl_id,
+            )
+        else:
+            logger.warning("ONLYOFFICE 回调 token 非法 template_id=%d", tpl_id)
         raise HTTPException(status.HTTP_403_FORBIDDEN, "回调 token 无效")
     body = await request.json()
     if not onlyoffice_service.verify_callback_jwt(body):
