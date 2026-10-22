@@ -1577,6 +1577,20 @@ onMounted(load)
         <el-option label="启用" value="active" />
         <el-option label="停用" value="inactive" />
       </el-select>
+      <!--
+        批量删除放在筛选这一行，不单独占一行（用户 2026-10-22 要求）：
+        它是针对「当前勾选」的操作，和筛选器同属表格上方的操作区。
+      -->
+      <el-button
+        v-if="auth.isAdmin && selectedMetrics.length > 0"
+        type="danger"
+        plain
+        class="filter-batch"
+        data-testid="metric-batch-delete"
+        @click="onBatchDelete"
+      >
+        批量删除（{{ selectedMetrics.length }}）
+      </el-button>
     </div>
 
     <DataTable
@@ -1593,17 +1607,6 @@ onMounted(load)
           @update:page-size="(v: number) => { pageSize = v; page = 1 }"
           @selection-change="onSelectionChange"
         >
-        <template #actions>
-          <el-button
-            v-if="auth.isAdmin && selectedMetrics.length > 0"
-            type="danger"
-            plain
-            data-testid="metric-batch-delete"
-            @click="onBatchDelete"
-          >
-            批量删除（{{ selectedMetrics.length }}）
-          </el-button>
-        </template>
       <template #columns>
         <el-table-column prop="name" label="名称" min-width="150" />
         <el-table-column label="类型" width="100">
@@ -2484,23 +2487,8 @@ onMounted(load)
   }
 }
 
-.filter-bar {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-  margin-bottom: var(--space-3);
-}
-
 .filter-tags {
   width: 300px;
-}
-
-.filter-name {
-  width: 200px;
-}
-
-.filter-status {
-  width: 120px;
 }
 
 .tag-cell {

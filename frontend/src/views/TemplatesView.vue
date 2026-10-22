@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { MoreFilled } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox, type UploadFile, type UploadFiles } from 'element-plus'
 
@@ -38,9 +38,23 @@ const rows = ref<TemplateListItem[]>([])
 const page = ref(1)
 const pageSize = ref(10)
 
+/**
+ * 按模板名搜索（客户端过滤，与指标页的「按名称搜索」一致）。
+ * 先过滤再分页 —— 顺序反了的话分页条数会不对。
+ */
+const nameFilter = ref('')
+const filteredRows = computed(() => {
+  const kw = nameFilter.value.trim().toLowerCase()
+  if (!kw) return rows.value
+  return rows.value.filter((r) => (r.name ?? '').toLowerCase().includes(kw))
+})
 const pagedRows = computed(() => {
   const start = (page.value - 1) * pageSize.value
-  return rows.value.slice(start, start + pageSize.value)
+  return filteredRows.value.slice(start, start + pageSize.value)
+})
+// 搜索条件变化时回到第一页，否则可能停在超出范围的页码上
+watch(nameFilter, () => {
+  page.value = 1
 })
 const metrics = ref<MetricDefinitionRead[]>([])
 const loading = ref(false)
@@ -388,12 +402,36 @@ async function onBatchDelete(): Promise<void> {
       </template>
     </PageHeader>
 
+    <div class="filter-bar">
+      <el-input
+        v-model="nameFilter"
+        placeholder="按模板名搜索"
+        clearable
+        class="filter-name"
+        data-testid="tpl-name-filter"
+      />
+      <!--
+        批量删除与搜索框同一行（用户 2026-10-22 要求），不单独占一行：
+        它针对的是「当前勾选」，与搜索同属表格上方的操作区。
+      -->
+      <el-button
+        v-if="selectedTemplates.length > 0"
+        type="danger"
+        plain
+        class="filter-batch"
+        data-testid="tpl-batch-delete"
+        @click="onBatchDelete"
+      >
+        批量删除（{{ selectedTemplates.length }}）
+      </el-button>
+    </div>
+
     <DataTable
       :data="pagedRows"
       :loading="loading"
       empty-text="暂无模板，点击右上角上传"
       pagination
-      :total="rows.length"
+      :total="filteredRows.length"
       :page="page"
       :page-size="pageSize"
       selection
@@ -404,17 +442,6 @@ async function onBatchDelete(): Promise<void> {
       @update:page-size="(v: number) => { pageSize = v; page = 1 }"
       @selection-change="onSelectionChange"
     >
-      <template #actions>
-        <el-button
-          v-if="selectedTemplates.length > 0"
-          type="danger"
-          plain
-          data-testid="tpl-batch-delete"
-          @click="onBatchDelete"
-        >
-          批量删除（{{ selectedTemplates.length }}）
-        </el-button>
-      </template>
       <template #columns>
         <el-table-column prop="name" label="模板名" min-width="160" />
         <el-table-column label="属主" width="120">
