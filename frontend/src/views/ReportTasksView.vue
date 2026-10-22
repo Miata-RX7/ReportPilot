@@ -212,11 +212,21 @@ async function onRun(row: ReportTaskRead) {
 }
 
 async function onDelete(row: ReportTaskRead) {
+  // 删除会连带抹掉执行历史与生成的文件，不可逆 —— 所以要求**手动输入任务名**确认，
+  // 而不只是点一下「确定」。
   try {
-    await ElMessageBox.confirm(
-      `删除任务「${row.name}」？仅允许删除从未执行过且已停用的任务。`,
+    await ElMessageBox.prompt(
+      `平台将会删除月报任务「${row.name}」及相关历史文件，请再次确认。`,
       '删除任务',
-      { type: 'warning' },
+      {
+        type: 'warning',
+        confirmButtonText: '确认删除',
+        cancelButtonText: '取消',
+        inputPlaceholder: `请输入任务名「${row.name}」`,
+        inputValidator: (val: string) =>
+          val?.trim() === row.name || '输入的任务名与要删除的任务不一致',
+        closeOnClickModal: false,
+      },
     )
   } catch {
     return

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { MoreFilled } from '@element-plus/icons-vue'
-import { ElMessage, type UploadFile, type UploadFiles } from 'element-plus'
+import { ElMessage, ElMessageBox, type UploadFile, type UploadFiles } from 'element-plus'
 
 import { confirmDelete } from '@/components/ConfirmDialog'
 import DataTable from '@/components/DataTable.vue'
@@ -337,6 +337,47 @@ async function onDelete(row: TemplateListItem) {
 }
 
 onMounted(load)
+
+/* ---- 批量操作 ---- */
+
+/**
+ * 勾选的模板。
+ *
+ * 模板管理**不提供「勾选全部」**（用户 2026-10-22 要求）：表头没有勾选框，
+ * 只能逐行手动勾选。理由是模板的删除权限因人而异（属主/被授权管理者），
+ * 一个「全选」很容易让人误以为能一起删掉别人的模板。
+ */
+const selectedTemplates = ref<TemplateListItem[]>([])
+
+function onSelectionChange(rows: TemplateListItem[]): void {
+  selectedTemplates.value = rows
+}
+
+async function onBatchDelete(): Promise<void> {
+  const rows = [...selectedTemplates.value]
+  if (!rows.length) return
+  const ok = await ElMessageBox.confirm(
+    `删除选中的 ${rows.length} 个模板？模板的所有版本与相关文件都会一并删除，且不可恢复。`,
+    '批量删除模板',
+    { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' },
+  ).catch(() => false)
+  if (!ok) return
+  let failed = 0
+  for (const r of rows) {
+    try {
+      await templateApi.remove(r.id)
+    } catch {
+      failed += 1
+    }
+  }
+  if (failed) {
+    ElMessage.warning(`已删除 ${rows.length - failed} 个，${failed} 个删除失败`)
+  } else {
+    ElMessage.success(`已删除 ${rows.length} 个模板`)
+  }
+  selectedTemplates.value = []
+  await load()
+}
 </script>
 
 <template>
@@ -355,9 +396,25 @@ onMounted(load)
       :total="rows.length"
       :page="page"
       :page-size="pageSize"
+      selection
+      :selection-header="false"
+      row-key="id"
+      :selectable="(row: TemplateListItem) => canManage(row.permission)"
       @update:page="(v: number) => (page = v)"
       @update:page-size="(v: number) => { pageSize = v; page = 1 }"
+      @selection-change="onSelectionChange"
     >
+      <template #actions>
+        <el-button
+          v-if="selectedTemplates.length > 0"
+          type="danger"
+          plain
+          data-testid="tpl-batch-delete"
+          @click="onBatchDelete"
+        >
+          批量删除（{{ selectedTemplates.length }}）
+        </el-button>
+      </template>
       <template #columns>
         <el-table-column prop="name" label="模板名" min-width="160" />
         <el-table-column label="属主" width="120">

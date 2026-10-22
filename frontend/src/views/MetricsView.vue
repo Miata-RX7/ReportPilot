@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import axios from 'axios'
-import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
+import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import { MoreFilled, QuestionFilled } from '@element-plus/icons-vue'
 
 import { confirmDelete } from '@/components/ConfirmDialog'
@@ -1460,6 +1460,49 @@ function onRowCommand(cmd: string, row: MetricDefinitionRead) {
   if (cmd === 'delete') void onDelete(row)
 }
 
+/* ---- 批量操作 ---- */
+
+/**
+ * 勾选的行。
+ *
+ * 注意：表头的「勾选全部」**只作用于当前页** —— 这里的 :data 是分页切片
+ * （pagedRows），el-table 看到的就是本页数据，勾选框自然不会跨页
+ * （用户 2026-10-22 明确要求）。翻页后 el-table 因数据源变化会清空勾选，
+ * 这正好符合「勾选的是这一页的语义」。
+ */
+const selectedMetrics = ref<MetricDefinitionRead[]>([])
+
+function onSelectionChange(rows: MetricDefinitionRead[]): void {
+  selectedMetrics.value = rows
+}
+
+/** 批量删除：逐条调单删接口。 */
+async function onBatchDelete(): Promise<void> {
+  const rows = [...selectedMetrics.value]
+  if (!rows.length) return
+  const ok = await ElMessageBox.confirm(
+    `删除选中的 ${rows.length} 个指标？删除后不可恢复。`,
+    '批量删除指标',
+    { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' },
+  ).catch(() => false)
+  if (!ok) return
+  let failed = 0
+  for (const r of rows) {
+    try {
+      await metricApi.remove(r.id)
+    } catch {
+      failed += 1
+    }
+  }
+  if (failed) {
+    ElMessage.warning(`已删除 ${rows.length - failed} 个，${failed} 个删除失败`)
+  } else {
+    ElMessage.success(`已删除 ${rows.length} 个指标`)
+  }
+  selectedMetrics.value = []
+  await load()
+}
+
 /* ---- 试算 ---- */
 function openCompute(metricId: number | null, precision: number | null = null) {
   if (metricId === null) {
@@ -1544,9 +1587,23 @@ onMounted(load)
           :total="visibleRows.length"
           :page="page"
           :page-size="pageSize"
+          selection
+          row-key="id"
           @update:page="(v: number) => (page = v)"
           @update:page-size="(v: number) => { pageSize = v; page = 1 }"
+          @selection-change="onSelectionChange"
         >
+        <template #actions>
+          <el-button
+            v-if="auth.isAdmin && selectedMetrics.length > 0"
+            type="danger"
+            plain
+            data-testid="metric-batch-delete"
+            @click="onBatchDelete"
+          >
+            批量删除（{{ selectedMetrics.length }}）
+          </el-button>
+        </template>
       <template #columns>
         <el-table-column prop="name" label="名称" min-width="150" />
         <el-table-column label="类型" width="100">
