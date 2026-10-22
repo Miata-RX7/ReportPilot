@@ -14,11 +14,12 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from apscheduler.triggers.cron import CronTrigger
-from sqlalchemy import func, select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import AsyncSessionLocal
-from app.models.report import Report
+from app.models.ai_call import AiCallLog
+from app.models.report import PushRecord, Report, ReportAudit
 from app.models.task import ReportTask
 from app.models.template import WordTemplate
 from app.services.period_utils import (
@@ -287,26 +288,63 @@ async def set_active(db: AsyncSession, task: ReportTask, is_active: bool) -> Rep
 
 
 async def delete_task(db: AsyncSession, task: ReportTask) -> None:
-    """删除任务。
+    """删除任务，并**连带清掉执行历史与生成的文件**。
 
-    硬约束（Q6）：仅允许删除 **已停用 且 从未执行过** 的任务，
-    以保住实例的审计链（有实例的任务只能停用）。
+    前置条件：任务必须**已停用**。停用是「不再产生新实例」，删除是「连历史一起
+    抹掉」—— 两步分开更安全，误操作时还有一道闸。
+
+    2026-10-22 用户要求：删除时把执行历史（Report 实例）及相关文件一并清掉。
+    此前是硬约束「必须从未执行过、且无实例」，导致执行过的任务永远删不掉，
+    只能停用 —— 运维上「停用」和「删除」是两件不同的事，不该混为一谈。
+
+    清理范围：
+    - Report 实例行（子表 report_audits / push_records / ai_calls 依赖它，
+      模型上都是 ondelete="CASCADE"；这里仍显式删子表，不依赖数据库是否
+      真的建了级联约束）
+    - 每个实例生成的报告 docx（磁盘文件，DB 删了就再也找不到路径）
+    - 调度注册
     """
     if task.is_active:
         raise TaskError("请先停用任务再删除")
-    if task.last_run_at is not None:
-        raise TaskError("该任务已执行过，不能删除（可停用）")
-    count = await db.scalar(
-        select(func.count(Report.id)).where(Report.task_id == task.id)
-    )
-    if count:
-        raise TaskError("该任务已产生实例，不能删除（可停用）")
-    from app.services import scheduler as scheduler_mod
 
+    reports = list(
+        (
+            await db.scalars(select(Report).where(Report.task_id == task.id))
+        ).all()
+    )
+    # 磁盘文件路径要**先收集**：DB 行删掉之后就查不到了
+    file_paths = [r.file_path for r in reports if r.file_path]
+
+    for r in reports:
+        # 子表显式删：模型里写的是 ondelete="CASCADE"，但那要数据库真的建了
+        # 级联约束才生效（老库/手工改过的库可能没有）。显式删不依赖任何假设。
+        await db.execute(
+            delete(ReportAudit).where(ReportAudit.report_id == r.id)
+        )
+        await db.execute(delete(PushRecord).where(PushRecord.report_id == r.id))
+        await db.execute(
+            delete(AiCallLog).where(AiCallLog.report_id == r.id)
+        )
+        await db.delete(r)
     await remove_task_schedule(task.id)
     await db.delete(task)
     await db.commit()
-    logger.info("任务已删除 id=%d", task.id)
+
+    # 放在提交之后：先删文件再删库的话，万一库侧失败就会留下「记录还在、文件没了」
+    # 的悬空引用，比残留几个没人引用的孤儿文件糟糕得多。
+    for p in file_paths:
+        try:
+            Path(p).unlink(missing_ok=True)
+        except OSError as exc:
+            # 文件删不掉不该让整个删除失败 —— DB 已经删干净了，留个警告即可
+            logger.warning("任务删除后清理报告文件失败 path=%s err=%s", p, exc)
+
+    logger.info(
+        "任务已删除 id=%d（同时清理实例 %d 个、文件 %d 个）",
+        task.id,
+        len(reports),
+        len(file_paths),
+    )
 
 
 # --------------------------------------------------------------------------
