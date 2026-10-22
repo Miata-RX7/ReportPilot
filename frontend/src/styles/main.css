@@ -88,6 +88,33 @@ body {
 }
 
 /*
+ * 列表页筛选栏：指标管理与模板管理共用。
+ *
+ * 放在全局而不是各自页面的 scoped 样式里 —— 两个页面的筛选栏结构一样
+ * （搜索框 + 若干下拉 + 批量操作按钮），复制两份迟早会走样。
+ */
+.filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.filter-name {
+  width: 200px;
+}
+
+.filter-status {
+  width: 120px;
+}
+
+/* 批量操作按钮：不撑开，贴着前面的筛选器 */
+.filter-batch {
+  margin-left: auto;
+}
+
+/*
  * 下拉类控件：点击标签不再展开菜单
  *
  * Element Plus 的 el-form-item 会给 <label> 渲染 for=…，指向内部控件。
