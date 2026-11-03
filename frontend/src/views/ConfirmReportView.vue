@@ -8,6 +8,8 @@ import type { ConfirmPreview, ConfirmResult } from '@/api/types'
 import { parseApiError } from '@/utils/error'
 import { formatDateTime, periodLabel } from '@/utils/format'
 
+import { reportFileApi, type ReportFile, type SummaryDraft } from '@/api/reportFiles'
+
 const route = useRoute()
 
 const preview = ref<ConfirmPreview | null>(null)
@@ -41,6 +43,8 @@ async function load() {
   try {
     const { data } = await confirmApi.preview(reportId.value, token.value)
     preview.value = data
+    summaryPlaceholders.value = data.summary_placeholders ?? []
+    await loadFiles()
   } catch (error) {
     loadError.value = parseApiError(error).message
   } finally {
@@ -48,10 +52,133 @@ async function load() {
   }
 }
 
+/* ---------------- 上传的本期数据文件与总结 ---------------- */
+
+const files = ref<ReportFile[]>([])
+const uploading = ref(false)
+const generatingId = ref<number | null>(null)
+/** 每个文件的草稿：{file_id -> {prompt, text, categories, verification}} */
+const drafts = ref<
+  Record<
+    number,
+    {
+      placeholder: string
+      prompt: string
+      text: string
+      categories: SummaryDraft['categories']
+      verification: SummaryDraft['verification']
+    }
+  >
+>({})
+/** 模板里声明的「总结_」占位（由后端随报告概要一起给出），供用户挑选 */
+const summaryPlaceholders = ref<string[]>([])
+
+async function loadFiles() {
+  try {
+    const { data } = await reportFileApi.list(reportId.value, token.value)
+    files.value = data
+    // 回显已生成的总结（重新打开页面时不丢）
+    for (const f of data) {
+      if (f.summary) {
+        drafts.value[f.id] = {
+          placeholder: f.summary.placeholder,
+          prompt: f.summary.prompt,
+          text: f.summary.text,
+          categories: f.summary.categories,
+          verification: f.summary.verification,
+        }
+      }
+    }
+  } catch {
+    // 文件列表拿不到不影响确认（可能没有需要上传的文件）
+  }
+}
+
+/** el-upload 的 change 回调：模板内联表达式不支持 TS 断言，所以放脚本里 */
+function onFilePick(uploadFile: unknown) {
+  const f = uploadFile as { raw?: File } | undefined
+  if (f?.raw) void onUpload(f.raw)
+}
+
+async function onUpload(file: File) {
+  uploading.value = true
+  try {
+    await reportFileApi.upload(reportId.value, token.value, file)
+    ElMessage.success('文件已上传')
+    await loadFiles()
+  } catch (error) {
+    ElMessage.error(parseApiError(error).message)
+  } finally {
+    uploading.value = false
+  }
+}
+
+function draftOf(fileId: number) {
+  return drafts.value[fileId]
+}
+
+function setDraft(
+  fileId: number,
+  patch: Partial<{ placeholder: string; prompt: string; text: string }>,
+) {
+  const cur = drafts.value[fileId] ?? {
+    placeholder: `总结_${fileId}`,
+    prompt: '',
+    text: '',
+    categories: [],
+    verification: { categories: 0, numbers: 0, verified: true, issues: [] },
+  }
+  drafts.value[fileId] = { ...cur, ...patch }
+}
+
+async function onGenerate(file: ReportFile) {
+  generatingId.value = file.id
+  try {
+    const d = draftOf(file.id)
+    const { data } = await reportFileApi.summarize(reportId.value, file.id, token.value, {
+      prompt: d?.prompt ?? '',
+    })
+    drafts.value[file.id] = {
+      placeholder: d?.placeholder ?? `总结_${file.id}`,
+      prompt: d?.prompt ?? '',
+      text: data.text,
+      categories: data.categories,
+      verification: data.verification,
+    }
+    ElMessage.success('总结已生成，可直接编辑')
+  } catch (error) {
+    ElMessage.error(parseApiError(error).message)
+  } finally {
+    generatingId.value = null
+  }
+}
+
+/** 溯源：某个分类对应的证据行原文 */
+const traceRows = ref<Record<number, { no: number; text: string }[]>>({})
+function showTrace(file: ReportFile, catIndex: number) {
+  const d = draftOf(file.id)
+  const cat = d?.categories[catIndex]
+  if (!cat) return
+  traceRows.value[file.id] = cat.rows.map((no) => ({
+    no,
+    text: `第 ${no} 行属于「${cat.name}」`,
+  }))
+}
+
 async function onConfirm() {
   confirming.value = true
   try {
-    const { data } = await confirmApi.confirm(reportId.value, token.value)
+    const summaries = Object.entries(drafts.value)
+      .filter(([, d]) => d.text.trim())
+      .map(([fileId, d]) => ({
+        file_id: Number(fileId),
+        placeholder: d.placeholder || `总结_${fileId}`,
+        prompt: d.prompt,
+        text: d.text,
+        categories: d.categories,
+        verification: d.verification,
+      }))
+    const { data } = await confirmApi.confirm(reportId.value, token.value, summaries)
     result.value = data
     ElMessage.success(data.message)
   } catch (error) {
@@ -148,7 +275,111 @@ onMounted(load)
         />
 
         <div class="confirm-actions">
-          <el-button
+          <!-- 上传的本期数据文件 + AI 生成的总结（2026-11-03） -->
+      <div class="data-files">
+        <div class="data-files__head">
+          <span class="data-files__title">本期数据文件与总结</span>
+          <span class="data-files__hint">
+            上传明细 Excel，系统会按表格内容做分类统计并生成总结；可自行编辑后确认。
+          </span>
+        </div>
+
+        <div class="data-files__upload">
+          <el-upload
+            :auto-upload="false"
+            :show-file-list="false"
+            accept=".xlsx,.xlsm"
+            :on-change="onFilePick"
+          >
+            <el-button :loading="uploading">上传 Excel 文件</el-button>
+          </el-upload>
+        </div>
+
+        <div v-for="f in files" :key="f.id" class="data-file">
+          <div class="data-file__head">
+            <span class="data-file__name">{{ f.filename }}</span>
+            <span class="data-file__meta">{{ f.row_count }} 行数据</span>
+          </div>
+
+          <!-- 占位选择：这个总结填到模板的哪一处 -->
+          <div class="data-file__ph">
+            <span class="data-file__ph-label">填入占位</span>
+            <el-select
+              :model-value="draftOf(f.id)?.placeholder ?? ''"
+              placeholder="选择模板中的总结占位"
+              size="small"
+              data-testid="summary-placeholder"
+              @update:model-value="(v: string) => setDraft(f.id, { placeholder: v })"
+            >
+              <el-option
+                v-for="ph in summaryPlaceholders"
+                :key="ph"
+                :label="ph"
+                :value="ph"
+              />
+              <el-option
+                v-if="!summaryPlaceholders.includes(draftOf(f.id)?.placeholder ?? '')"
+                :label="draftOf(f.id)?.placeholder ?? ''"
+                :value="draftOf(f.id)?.placeholder ?? ''"
+              />
+            </el-select>
+          </div>
+
+          <el-input
+            :model-value="draftOf(f.id)?.prompt ?? ''"
+            placeholder="写作要求（可留空）。例如：按处理类型分类统计并列数数量"
+            data-testid="summary-prompt"
+            @update:model-value="(v: string) => setDraft(f.id, { prompt: v })"
+          />
+
+          <div class="data-file__actions">
+            <el-button
+              type="primary"
+              plain
+              :loading="generatingId === f.id"
+              data-testid="summary-generate"
+              @click="onGenerate(f)"
+            >
+              AI 生成总结
+            </el-button>
+          </div>
+
+          <el-input
+            :model-value="draftOf(f.id)?.text ?? ''"
+            type="textarea"
+            :rows="4"
+            placeholder="总结文本（AI 生成后可自行编辑）"
+            data-testid="summary-text"
+            @update:model-value="(v: string) => setDraft(f.id, { text: v })"
+          />
+
+          <!-- 溯源：数字指得出具体的行 -->
+          <div v-if="draftOf(f.id)?.categories?.length" class="data-file__trace">
+            <div class="data-file__trace-head">
+              共 {{ draftOf(f.id)?.verification?.categories ?? 0 }} 个分类 ·
+              {{ draftOf(f.id)?.verification?.numbers ?? 0 }} 个数字 ·
+              <span :class="draftOf(f.id)?.verification?.verified ? 'ok' : 'warn'">
+                {{ draftOf(f.id)?.verification?.verified ? '全部可溯源' : '有待确认项' }}
+              </span>
+            </div>
+            <div
+              v-for="(cat, ci) in draftOf(f.id)?.categories ?? []"
+              :key="cat.name"
+              class="trace-row"
+            >
+              <span class="trace-row__name">{{ cat.name }}</span>
+              <span class="trace-row__count">{{ cat.count }}</span>
+              <el-button link type="primary" @click="showTrace(f, ci)">查看依据</el-button>
+              <span v-if="!cat.verified" class="trace-row__warn">{{ cat.notes?.join('；') }}</span>
+            </div>
+            <div v-if="traceRows[f.id]?.length" class="trace-detail">
+              <div v-for="r in traceRows[f.id]" :key="r.no">{{ r.text }}</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <el-button
             type="primary"
             size="large"
             :loading="confirming"
@@ -254,5 +485,88 @@ onMounted(load)
   color: var(--el-color-danger);
   font-size: 13px;
   margin-bottom: 8px;
+}
+.data-files {
+  margin-top: var(--space-4);
+  padding: var(--space-3);
+  border: 1px solid var(--color-border-light, #e2e8f0);
+  border-radius: var(--radius-md, 6px);
+}
+.data-files__head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-bottom: var(--space-3);
+}
+.data-files__title {
+  font-weight: 600;
+}
+.data-files__hint,
+.data-file__meta {
+  color: var(--color-text-secondary, #64748b);
+  font-size: var(--font-xs, 12px);
+}
+.data-files__upload {
+  margin-bottom: var(--space-3);
+}
+.data-file {
+  padding: var(--space-3) 0;
+  border-top: 1px solid var(--color-border-lighter, #f1f5f9);
+}
+.data-file__head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+.data-file__name {
+  font-weight: 600;
+}
+.data-file__ph {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+.data-file__ph-label {
+  font-size: var(--font-xs, 12px);
+  color: var(--color-text-secondary, #64748b);
+  white-space: nowrap;
+}
+.data-file__actions {
+  margin: var(--space-2) 0;
+}
+.data-file__trace {
+  margin-top: var(--space-2);
+  font-size: var(--font-xs, 12px);
+}
+.data-file__trace-head {
+  color: var(--color-text-secondary, #64748b);
+  margin-bottom: var(--space-1);
+}
+.data-file__trace-head .ok {
+  color: var(--color-success, #047857);
+}
+.data-file__trace-head .warn {
+  color: var(--color-warning, #c2410c);
+}
+.trace-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 2px 0;
+}
+.trace-row__count {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+.trace-row__warn {
+  color: var(--color-warning, #c2410c);
+}
+.trace-detail {
+  margin: var(--space-1) 0 var(--space-2) var(--space-3);
+  padding-left: var(--space-2);
+  border-left: 2px solid var(--color-border-light, #e2e8f0);
+  color: var(--color-text-secondary, #64748b);
 }
 </style>

@@ -6,7 +6,13 @@ from app.models.app_setting import AppSetting
 from app.models.base import Base
 from app.models.datasource import DataSource
 from app.models.metric import MetricDefinition
-from app.models.report import Report, ReportAudit, PushRecord
+from app.models.report import (
+    PushRecord,
+    Report,
+    ReportAudit,
+    ReportSummary,
+    ReportTaskFile,
+)
 from app.models.task import ReportTask
 from app.models.template import (
     TemplateBinding,

@@ -9,6 +9,10 @@ import logging
 from pathlib import Path
 from typing import Any
 
+#: 「总结类」模板占位的前缀（{{ 总结_xxx }}）。这类占位不参与模板绑定，
+#: 由确认人在确认页上传文件后生成、确认时快照、渲染时注入。
+SUMMARY_PLACEHOLDER_PREFIX = "总结_"
+
 from docxtpl import DocxTemplate
 from jinja2.sandbox import SandboxedEnvironment
 
@@ -45,14 +49,28 @@ def template_variables(tpl: DocxTemplate) -> set[str]:
 
 
 def check_context(tpl_vars: set[str], context: dict[str, Any]) -> None:
-    """context 与模板变量必须精确一致（缺失/多余均报错）。"""
+    """context 与模板变量必须精确一致（缺失/多余均报错）。
+
+    **例外**：「总结_」开头的变量是**运行时填充**的占位（确认人上传文件 ->
+    AI 生成总结 -> 确认时快照 -> 渲染时注入），模板管理页**不要求绑定**它们。
+    所以它们缺失不算错误；反过来，context 里出现模板没有的变量仍然报错。
+    """
     ctx_vars = set(context.keys())
-    if tpl_vars != ctx_vars:
-        missing = sorted(tpl_vars - ctx_vars)
-        extra = sorted(ctx_vars - tpl_vars)
+    missing = sorted(v for v in (tpl_vars - ctx_vars) if not is_summary_placeholder(v))
+    extra = sorted(ctx_vars - tpl_vars)
+    if missing or extra:
         raise RenderError(
             f"context 与模板变量不一致: 缺失 {missing}, 多余 {extra}"
         )
+
+
+def is_summary_placeholder(name: str) -> bool:
+    """是否为「总结类」占位（{{ 总结_xxx }}）。
+
+    命名约定：前缀「总结_」。这类占位不参与模板绑定，由确认人在确认页上传文件
+    后生成、确认时快照、渲染时注入。
+    """
+    return name.strip().startswith(SUMMARY_PLACEHOLDER_PREFIX)
 
 
 def render_docx(

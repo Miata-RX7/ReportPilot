@@ -80,7 +80,7 @@ async def _seed(factory, tmp_path, status: str = "confirmed") -> int:
 
 
 def _patch_mail(monkeypatch, fail: str | None = None) -> None:
-    async def fake_send(recipients, report_name, period, path):
+    async def fake_send(recipients, report_name, period, path, extra_attachments=None):
         if fail:
             raise MailerError(fail)
 

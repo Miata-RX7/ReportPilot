@@ -14,6 +14,7 @@ from app.api import (
     datasources,
     metrics,
     push_records,
+    report_files,
     reports,
     system,
     tasks,
@@ -93,6 +94,10 @@ def create_app() -> FastAPI:
     )
     app.include_router(
         push_records.router, prefix="/api/push-records", tags=["push-records"]
+    )
+    # 确认页的数据文件与总结（凭邮件里的一次性 token，无需登录）
+    app.include_router(
+        report_files.router, prefix="/api/report-files", tags=["report-files"]
     )
     # AI 调用留痕（只读）：回答「每次请求 AI 的参数与 prompt 是什么」
     app.include_router(

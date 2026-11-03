@@ -47,7 +47,22 @@ export const confirmApi = {
   preview(reportId: number, token: string) {
     return http.get<ConfirmPreview>(`/confirm/${reportId}`, { params: { token } })
   },
-  confirm(reportId: number, token: string) {
-    return http.post<ConfirmResult>(`/confirm/${reportId}`, { token })
+  /**
+   * 确认并推送。``summaries`` 是确认人最终提交的总结（人工编辑后的文本）——
+   * 后端会把它**快照**下来，报告重渲染时填进「总结_」占位。
+   */
+  confirm(
+    reportId: number,
+    token: string,
+    summaries: {
+      file_id: number
+      placeholder: string
+      prompt: string
+      text: string
+      categories: object[]
+      verification: object
+    }[] = [],
+  ) {
+    return http.post<ConfirmResult>(`/confirm/${reportId}`, { token, summaries })
   },
 }

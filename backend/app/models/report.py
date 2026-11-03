@@ -165,3 +165,69 @@ class PushRecord(Base):
         default=lambda: datetime.now(UTC),
         nullable=False,
     )
+
+
+class ReportTaskFile(TimestampMixin, Base):
+    """确认人在确认页上传的本期数据文件（Excel 等）。
+
+    **挂在 report 上而不是 task 上**：同一任务每月一份文件，文件属于「这一期报告」。
+    任务只是归属维度，方便在任务详情里看「本期传了什么」。
+
+    同一个文件可能被多个报告引用（重跑），因此存 sha256 便于去重与追溯。
+    """
+
+    __tablename__ = "report_task_files"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    report_id: Mapped[int] = mapped_column(
+        ForeignKey("reports.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    task_id: Mapped[int | None] = mapped_column(
+        ForeignKey("report_tasks.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    # 原始文件名（下载/做邮件附件时用它）
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    # 磁盘路径
+    stored_path: Mapped[str] = mapped_column(String(512), nullable=False)
+    # 内容哈希：同一文件重复上传可识别，也用于确认快照的一致性核对
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    size_bytes: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # 解析出的数据行数（0 表示还没解析）
+    row_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # 解析出的表头（列名列表），前端展示用
+    columns_json: Mapped[list[Any]] = mapped_column(JSONVariant, default=list)
+    uploaded_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+
+class ReportSummary(TimestampMixin, Base):
+    """某个上传文件生成的总结（**确认快照**）。
+
+    为什么是快照而不是「实时读文件」：确认人确认后，文件理论上仍可能被替换。
+    若渲染时读实时文件，最终报告的内容就与确认人确认过的不是一回事 ——
+    对一份要发出去、有审计链的报告，这是硬伤。
+
+    确认时写入，之后不可变；报告渲染读的是这里。
+    """
+
+    __tablename__ = "report_summaries"
+    __table_args__ = (Index("ix_report_summary_report_placeholder", "report_id", "placeholder"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    report_id: Mapped[int] = mapped_column(
+        ForeignKey("reports.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    file_id: Mapped[int] = mapped_column(
+        ForeignKey("report_task_files.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    # 对应的模板占位（不含大括号）：如「总结_工单汇总」
+    placeholder: Mapped[str] = mapped_column(String(128), nullable=False)
+    # 本次使用的提示词（留痕：换了提示词要能看出为什么结果不同）
+    prompt: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    # 最终总结文本（**人工可编辑后的版本** —— 确认的是人改过的内容）
+    text: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    # 溯源数据：[{name, count, rows, match, verified, note}]
+    categories_json: Mapped[list[Any]] = mapped_column(JSONVariant, default=list)
+    # 校验摘要：{"categories": n, "numbers": n, "verified": bool, "issues": [...]}
+    verification_json: Mapped[dict[str, Any]] = mapped_column(JSONVariant, default=dict)

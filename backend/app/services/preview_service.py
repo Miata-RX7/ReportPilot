@@ -217,6 +217,7 @@ def build_context(
     insight_texts: dict[str, str],
     *,
     image_factory: Callable[[MetricFact], Any] | None = None,
+    summary_texts: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """构建渲染 context。insight 槽位文本由调用方注入（槽位 key -> 文本）。
 
@@ -225,6 +226,10 @@ def build_context(
     - text：取 payload 里的文本
     - series / pie：渲染为 PNG 并包装成 InlineImage（阶段 3A 起支持 curve；
       pie 在 3B 接上）。未提供 image_factory 时显式报错，绝不把 dict 塞进 Word。
+
+    ``summary_texts``：「总结_」开头占位的文本（确认人上传文件后 AI 生成、
+    人工可编辑、确认时快照）。这些占位**不参与模板绑定**，所以不在 bindings 里，
+    这里单独注入；没提供就填占位符文字，不会让渲染失败。
     """
     context: dict[str, Any] = {}
     for b in bindings:
@@ -256,6 +261,11 @@ def build_context(
             raise PreviewError(
                 f"变量 {b.placeholder} 的绑定类型非法: {b.binding_type}"
             )
+
+    # 「总结_」占位不在 bindings 里（不参与绑定），单独注入
+    if summary_texts:
+        for ph, text in summary_texts.items():
+            context[ph] = text
     return context
 
 
