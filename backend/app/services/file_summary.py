@@ -232,6 +232,7 @@ def verify_categories(
     - omission：有行满足依据却未被计入
     """
     v = Verification(categories=len(cats))
+    dropped_categories: list[tuple[str, int, int]] = []
     for c in cats:
         # **先自动修复 AI 的小错**，再校验 —— 这类错误不该让整个生成失败：
         # - 行号在表里不存在 -> 剔除（AI 编造的）
@@ -251,6 +252,15 @@ def verify_categories(
             c.notes.append(f"[fixed] 剔除了 {dropped} 个不存在的行号")
         c.rows = clean
         v.numbers += len(c.rows)
+        # **无效行号占比过高 -> 整个分类作废**。
+        # 实测：AI 给「其他」报了 199 个行号，其中 104 个在表里不存在 —— 那是
+        # **编造**的。剔除后剩 95 个「看起来合法」的行号，但这些数字毫无意义，
+        # 放进报告就是错的。
+        # 所以：无效比例超阈值就丢弃这个分类（不进正文），并在 issues 里说明。
+        if dropped and len(clean) and dropped > max(3, len(clean) // 2):
+            dropped_categories.append((c.name, dropped, len(c.rows) + dropped))
+            c.rows = []
+            c.verified = False
 
     # 总账：**每一行都至少被归到一个类**（并集覆盖全部有效数据行）。
     #
@@ -267,6 +277,19 @@ def verify_categories(
         )
     v.verified = v.verified and not total_issue and all(c.verified for c in cats)
     issues = [f"{c.name}：{'；'.join(c.notes)}" for c in cats if c.notes]
+    # 「其他」是兜底类 —— 它占比过高说明 AI 归类质量差（同样的表两次跑能差出
+    # 96 项 vs 2 项）。数量虽然对得上，但分类没意义，所以明确提示一句。
+    for c in cats:
+        if c.name in ("其他", "其它") and total and len(c.rows) > total * 0.3:
+            issues.append(
+                f"[warn] 「{c.name}」占了 {len(c.rows)}/{total} 行"
+                "（超过三成）—— AI 没能有效分类，建议人工调整这段总结"
+            )
+    for name, dropped, total in dropped_categories:
+        issues.append(
+            f"{name}：{total} 个行号里有 {dropped} 个在表中不存在（AI 编造），"
+            "该分类已作废，未计入统计"
+        )
     if total_issue:
         issues.append(total_issue)
     v.issues = issues
@@ -292,7 +315,9 @@ _BLOCK_PROMPT = """你是数据分类统计助手。下面给你一个表格的�
        —— 仅当该分类恰好对应 {label_col} 的某一个原始取值时用
      * {{"type": "keywords", "keywords": ["关键词1", "关键词2"]}}
        —— 合并了多个取值时用；关键词之间是「或」的关系，且必须能在单元格里直接匹配到
-3. 只输出 JSON，不要任何解释文字。格式：
+3. **如果某一行实在无法归入任何分类，统一归入「其他」** —— 不要跳过、不要留空、
+   也不要自造「未填写」「未知」这类名字（统一叫「其他」）。
+4. 只输出 JSON，不要任何解释文字。格式：
    {{"categories": [{{"name": "...", "rows": [1,2], "match": {{...}}}}]}}
 
 {known_hint}
@@ -315,66 +340,6 @@ def _known_hint(known: list[str]) -> str:
         + "、".join(known)
         + "\n\n"
     )
-
-
-def _drop_header_rows(rows: list[dict[str, Any]], columns: list[str]) -> list[dict[str, Any]]:
-    """剔除**混在数据中间的表头行**。
-
-    实测（2026-11-03）：这张 Excel 是两段数据拼在一起的 —— 前 11 行是「专线类
-    事件」，第 11 行是第二段的表头（列名都变了：事件类型/对接分支/事件描述），
-    后面 136 行是「运维工单」。那一行如果当数据，会被 AI 归成一个
-    「表头/汇总说明行」的假分类。
-
-    判定：某个单元格的取值**等于某个列名** -> 该行是表头行。
-    """
-    col_set = {c.strip() for c in columns}
-    out: list[dict[str, Any]] = []
-    for r in rows:
-        vals = set()
-        for k, v in r.items():
-            if k == "__row":
-                continue
-            s = str(v or "").strip()
-            if s:
-                vals.add(s)
-        if vals & col_set:
-            continue
-        out.append(r)
-    return out
-
-
-def _pick_columns(
-    rows: list[dict[str, Any]],
-    columns: list[str],
-    must_keep: list[str] | None = None,
-) -> list[str]:
-    """挑出**值得喂给 AI** 的列。
-
-    实测（2026-11-03）：8 列全喂进去，每行近 1000 字符，147 行分 5 块要跑
-    100 秒以上 —— 而「日期」「处理人员」「负责人」对分类毫无帮助。只保留：
-      - **描述性列**：单元格平均长度明显大于 10（内容长、值各异，正是分类依据）
-      - **低基数列**：取值种类少（网络类型这种，可能就是分类维度本身）
-    """
-    if not rows:
-        return list(columns)
-    n = len(rows)
-    keep: list[str] = []
-    for col in columns:
-        vals = [str(r.get(col, "") or "") for r in rows]
-        nonempty = [v for v in vals if v.strip()]
-        if not nonempty:
-            continue
-        avg_len = sum(len(v) for v in nonempty) / len(nonempty)
-        distinct = len(set(nonempty))
-        if avg_len > 10 or distinct <= max(2, n // 10):
-            keep.append(col)
-    # **分类列必须保留** —— 它是 AI 分类的依据，丢了 AI 只能按别的内容瞎分
-    # （实测踩过：低基数阈值没覆盖「网络类型」的 18 个取值，AI 分成了「香港」
-    # 「新加坡进出口」这种地点，而不是工单分类）。
-    for col in must_keep or []:
-        if col in columns and col not in keep:
-            keep.insert(0, col)
-    return keep or list(columns)
 
 
 def _rows_text(
@@ -647,21 +612,15 @@ async def summarize_sheet(
     ``call_ai`` 是 ai_insight 里的 ``_call_ai``（发消息、拿文本），
     ``ai_client`` 是 OpenAI 客户端 —— 两者注入进来，便于测试。
     """
-    # 先剔除混在数据中间的表头行（这张表是两段数据拼在一起的）
-    data_rows = _drop_header_rows(sheet.rows, sheet.columns)
-    if len(data_rows) != len(sheet.rows):
-        logger.info(
-            "剔除混在数据中间的表头行 %d 行", len(sheet.rows) - len(data_rows)
-        )
-    rows_by_no = {int(r["__row"]): r for r in data_rows}
+    rows_by_no = {int(r["__row"]): r for r in sheet.rows}
     collected: list[Category] = []
     # 块间累积**已使用的分类名**（配合 _known_hint）
     known_names: list[str] = []
 
     # 只把「有信息量」的列喂给 AI（提速的主因）
-    feed_cols = _pick_columns(data_rows, sheet.columns, must_keep=[label_col])
-    for start in range(0, len(data_rows), BLOCK_ROWS):
-        block = data_rows[start : start + BLOCK_ROWS]
+    feed_cols = list(sheet.columns)
+    for start in range(0, len(sheet.rows), BLOCK_ROWS):
+        block = sheet.rows[start : start + BLOCK_ROWS]
         user_text = _rows_text(block, sheet.columns, feed_cols)
         if prompt.strip():
             user_text = f"{prompt.strip()}\n\n{user_text}"
