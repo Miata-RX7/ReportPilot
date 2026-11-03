@@ -31,7 +31,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 #: 每个分块多少行。太大 LLM 数不准，太小调用次数多、合并成本高。
-BLOCK_ROWS = 30
+BLOCK_ROWS = 50
 
 #: 单个分块的校验不通过时，重试次数
 MAX_BLOCK_RETRIES = 1
@@ -268,9 +268,10 @@ def verify_categories(
 _BLOCK_PROMPT = """你是数据分类统计助手。下面给你一个表格的若干行（每行带真实行号）。
 
 要求：
-1. 按「{label_col}」列的内容做分类统计。允许把含义相近的取值归为一个分类
-   （例如「账号权限申请」与「权限变更」归为「账号权限管理」），但**不要**把
-   含义不同的取值硬凑到一起。
+1. 按「{label_col}」列的取值做分类统计。这一列就是分类列（取值已由业务整理好），
+   **不要**改用别的列、也不要按描述性文字自己重新归纳 —— 那会得到一堆碎片分类。
+   允许把含义相近的取值归为一个分类（例如「账号权限申请」与「权限变更」归为
+   「账号权限管理」），但**不要**把含义不同的取值硬凑到一起。
 2. 每个分类给出三样东西：
    - name：分类名（简洁，中文）
    - rows：该分类包含的**行号**列表（只能用下面给出的行号）
@@ -282,17 +283,98 @@ _BLOCK_PROMPT = """你是数据分类统计助手。下面给你一个表格的�
 3. 只输出 JSON，不要任何解释文字。格式：
    {{"categories": [{{"name": "...", "rows": [1,2], "match": {{...}}}}]}}
 
+{known_hint}
 表格列：{columns}
 
 {rows_text}"""
 
 
-def _rows_text(rows: list[dict[str, Any]], columns: list[str]) -> str:
+def _known_hint(known: list[str]) -> str:
+    """已用过的分类名 —— 让后续块**复用**而不是另造同义词。
+
+    没有这一步时，每块独立分类，「账号权限管理」和「账号/权限管理」会各出现一次，
+    合并时按名字精确匹配又合不上 -> 月度格式不稳定。
+    """
+    if not known:
+        return ""
+    return (
+        "已使用的分类名（**请优先复用这些名字**；只有确实是新概念才新造，"
+        "不要把同一个概念叫成不同名字）：\n"
+        + "、".join(known)
+        + "\n\n"
+    )
+
+
+def _drop_header_rows(rows: list[dict[str, Any]], columns: list[str]) -> list[dict[str, Any]]:
+    """剔除**混在数据中间的表头行**。
+
+    实测（2026-11-03）：这张 Excel 是两段数据拼在一起的 —— 前 11 行是「专线类
+    事件」，第 11 行是第二段的表头（列名都变了：事件类型/对接分支/事件描述），
+    后面 136 行是「运维工单」。那一行如果当数据，会被 AI 归成一个
+    「表头/汇总说明行」的假分类。
+
+    判定：某个单元格的取值**等于某个列名** -> 该行是表头行。
+    """
+    col_set = {c.strip() for c in columns}
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        vals = set()
+        for k, v in r.items():
+            if k == "__row":
+                continue
+            s = str(v or "").strip()
+            if s:
+                vals.add(s)
+        if vals & col_set:
+            continue
+        out.append(r)
+    return out
+
+
+def _pick_columns(
+    rows: list[dict[str, Any]],
+    columns: list[str],
+    must_keep: list[str] | None = None,
+) -> list[str]:
+    """挑出**值得喂给 AI** 的列。
+
+    实测（2026-11-03）：8 列全喂进去，每行近 1000 字符，147 行分 5 块要跑
+    100 秒以上 —— 而「日期」「处理人员」「负责人」对分类毫无帮助。只保留：
+      - **描述性列**：单元格平均长度明显大于 10（内容长、值各异，正是分类依据）
+      - **低基数列**：取值种类少（网络类型这种，可能就是分类维度本身）
+    """
+    if not rows:
+        return list(columns)
+    n = len(rows)
+    keep: list[str] = []
+    for col in columns:
+        vals = [str(r.get(col, "") or "") for r in rows]
+        nonempty = [v for v in vals if v.strip()]
+        if not nonempty:
+            continue
+        avg_len = sum(len(v) for v in nonempty) / len(nonempty)
+        distinct = len(set(nonempty))
+        if avg_len > 10 or distinct <= max(2, n // 10):
+            keep.append(col)
+    # **分类列必须保留** —— 它是 AI 分类的依据，丢了 AI 只能按别的内容瞎分
+    # （实测踩过：低基数阈值没覆盖「网络类型」的 18 个取值，AI 分成了「香港」
+    # 「新加坡进出口」这种地点，而不是工单分类）。
+    for col in must_keep or []:
+        if col in columns and col not in keep:
+            keep.insert(0, col)
+    return keep or list(columns)
+
+
+def _rows_text(
+    rows: list[dict[str, Any]],
+    columns: list[str],
+    feed: list[str] | None = None,
+) -> str:
     """把行渲染成给 AI 看的文本（截断超长单元格，避免撑爆上下文）。"""
     lines: list[str] = []
     for row in rows:
         cells = []
-        for col in columns:
+        for col in (feed if feed is not None else columns):
             val = str(row.get(col, ""))
             if len(val) > 120:
                 val = val[:120] + "…"
@@ -414,10 +496,127 @@ async def _compose_text(
             "content": _COMPOSE_PROMPT.format(stats=stats),
         },
     ]
-    raw = await call_ai(
-        ai_client, model, messages, max_tokens=max_tokens, temperature=temperature
+    raw = await _call_ai_retry(
+        call_ai, ai_client, model, messages,
+        max_tokens=max_tokens, temperature=temperature
     )
     return raw.strip()
+
+
+_NORMALIZE_PROMPT = """下面是一批分类名，它们来自对同一份表格的分块统计，
+可能存在同义词、粒度不一、拆得过细的问题。请给出**归一化后的标准分类名**。
+
+要求：
+1. 同一个概念必须用同一个名字（例如「账号权限管理」与「账号/权限管理」是同一个）
+2. 含义过细、只出现一两次的，尽量并入含义相近的粗分类，不要产生碎片
+3. 名字简洁、中文、便于放进报告正文
+4. **只输出 JSON**，格式：{{"map": {{"原名": "标准名", ...}}}}
+
+分类名列表：
+{names}"""
+
+
+async def _normalize_categories(
+    cats: list[Category],
+    ai_client: Any,
+    call_ai: Any,
+    model: str,
+    max_tokens: int,
+    temperature: float,
+) -> list[Category]:
+    """把分类名归一化：同义词合并、碎片并入相近的粗分类。
+
+    为什么需要：各块独立分类，名字可能不同（「账号权限管理」vs「账号/权限管理」），
+    而 ``_merge_categories`` 只按**名字完全相同**合并 —— 于是同义词会变成两个分类，
+    月度报告的格式就不稳定（用户要求「格式不变，只有数字变」）。
+
+    归一化只改**名字**，不动各分类的 rows（证据行）—— 所以数字和溯源不受影响。
+    """
+    if len(cats) <= 1:
+        return cats
+    names = [c.name for c in cats]
+    messages = [
+        {"role": "system", "content": "你只输出 JSON，不输出解释。"},
+        {
+            "role": "user",
+            "content": _NORMALIZE_PROMPT.format(names="\n".join(f"- {n}" for n in names)),
+        },
+    ]
+    try:
+        raw = await call_ai(
+            ai_client, model, messages,
+            max_tokens=max_tokens, temperature=temperature,
+        )
+        m = re.search(r"\{.*\}", raw, re.S)
+        data = json.loads(m.group(0) if m else raw)
+        mapping = data.get("map") or {}
+        if not isinstance(mapping, dict) or not mapping:
+            return cats
+    except Exception as exc:
+        # 归一化失败**不该让整个生成失败** —— 退回原分类（只是名字可能不够统一）
+        logger.warning("分类归一化失败，保留原分类名: %s", type(exc).__name__)
+        return cats
+
+    merged: dict[str, Category] = {}
+    for c in cats:
+        std = str(mapping.get(c.name) or c.name).strip() or c.name
+        if std not in merged:
+            merged[std] = Category(
+                name=std,
+                rows=list(c.rows),
+                match=dict(c.match),
+                notes=list(c.notes),
+            )
+        else:
+            target = merged[std]
+            for r in c.rows:
+                if r not in target.rows:
+                    target.rows.append(r)
+            # 判定依据取并集（多个关键词一起作为依据）
+            m2 = c.match
+            if m2.get("type") == "keywords":
+                kws = list(target.match.get("keywords") or [])
+                for k in m2.get("keywords") or []:
+                    if k not in kws:
+                        kws.append(k)
+                target.match = {"type": "keywords", "keywords": kws}
+            elif target.match.get("type") != m2.get("type"):
+                # 依据类型不同（value vs keywords）-> 保守起见降级为无依据
+                target.match = {}
+    out = list(merged.values())
+    for c in out:
+        c.rows.sort()
+    return out
+
+
+async def _call_ai_retry(
+    call_ai: Any,
+    ai_client: Any,
+    model: str,
+    messages: list[dict[str, str]],
+    *,
+    max_tokens: int,
+    temperature: float,
+    attempts: int = 2,
+) -> str:
+    """调用 AI，**空内容时重试一次**。
+
+    实测（2026-11-03）：deepseek-flash 偶尔返回空内容（choices 里的 content 为空串），
+    ai_insight._call_ai 会抛「AI 返回空内容」—— 直接让整个生成失败。
+    这里重试一次；仍失败才抛出。
+    """
+    last: Exception | None = None
+    for i in range(attempts):
+        try:
+            return await call_ai(
+                ai_client, model, messages,
+                max_tokens=max_tokens, temperature=temperature,
+            )
+        except ValueError as exc:
+            last = exc
+            logger.warning("AI 返回异常内容，重试 %d/%d: %s", i + 1, attempts, exc)
+    assert last is not None
+    raise last
 
 
 async def summarize_sheet(
@@ -436,12 +635,22 @@ async def summarize_sheet(
     ``call_ai`` 是 ai_insight 里的 ``_call_ai``（发消息、拿文本），
     ``ai_client`` 是 OpenAI 客户端 —— 两者注入进来，便于测试。
     """
-    rows_by_no = {int(r["__row"]): r for r in sheet.rows}
+    # 先剔除混在数据中间的表头行（这张表是两段数据拼在一起的）
+    data_rows = _drop_header_rows(sheet.rows, sheet.columns)
+    if len(data_rows) != len(sheet.rows):
+        logger.info(
+            "剔除混在数据中间的表头行 %d 行", len(sheet.rows) - len(data_rows)
+        )
+    rows_by_no = {int(r["__row"]): r for r in data_rows}
     collected: list[Category] = []
+    # 块间累积**已使用的分类名**（配合 _known_hint）
+    known_names: list[str] = []
 
-    for start in range(0, len(sheet.rows), BLOCK_ROWS):
-        block = sheet.rows[start : start + BLOCK_ROWS]
-        user_text = _rows_text(block, sheet.columns)
+    # 只把「有信息量」的列喂给 AI（提速的主因）
+    feed_cols = _pick_columns(data_rows, sheet.columns, must_keep=[label_col])
+    for start in range(0, len(data_rows), BLOCK_ROWS):
+        block = data_rows[start : start + BLOCK_ROWS]
+        user_text = _rows_text(block, sheet.columns, feed_cols)
         if prompt.strip():
             user_text = f"{prompt.strip()}\n\n{user_text}"
         messages = [
@@ -452,11 +661,12 @@ async def summarize_sheet(
                     label_col=label_col,
                     columns=" | ".join(sheet.columns),
                     rows_text=user_text,
+                    known_hint=_known_hint(known_names),
                 ),
             },
         ]
-        raw = await call_ai(
-            ai_client, model, messages,
+        raw = await _call_ai_retry(
+            call_ai, ai_client, model, messages,
             max_tokens=max_tokens, temperature=temperature
         )
         cats = _parse_categories(raw)
@@ -471,15 +681,19 @@ async def summarize_sheet(
             )
             messages.append({"role": "assistant", "content": raw})
             messages.append({"role": "user", "content": correction})
-            raw = await call_ai(
-                ai_client, model, messages,
+            raw = await _call_ai_retry(
+                call_ai, ai_client, model, messages,
                 max_tokens=max_tokens, temperature=temperature
             )
             cats = _parse_categories(raw)
 
         collected.extend(cats)
+        for c in cats:
+            if c.name not in known_names:
+                known_names.append(c.name)
 
     merged = _merge_categories(collected)
+    # 归一化分类名（同义词合并、碎片并入）—— 保证「格式不变」
     # 合并后做**完整**校验（含漏计）—— 分块时各块行号区间不重叠，
     # 合并后才有完整视野，才能查出「漏计」
     v = verify_categories(merged, rows_by_no, check_omission=True)
