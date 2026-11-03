@@ -214,15 +214,22 @@ def _match_text(row: dict[str, Any], match: dict[str, Any]) -> bool:
 def verify_categories(
     cats: list[Category],
     rows_by_no: dict[int, dict[str, Any]],
-    *,
-    check_omission: bool = True,
 ) -> Verification:
     """校验分类与证据行的一致性（全部确定性检查）。
 
-    三件事：
-    1. 声称的数量 == 证据行数
-    2. 证据行真实存在，且真的满足判定依据
-    3. **漏计**：还有行满足依据却没被列入（统计场景最常见又最难自查的错）
+    **口径（用户 2026-11-03 明确要求）**：**数量能对上就行**，不校验「证据行是否
+    满足判定依据」。理由：这类事项本身语义模糊，人为分都未必分得准，用机器去卡
+    「这行该不该属于这一类」只会制造大量误报。
+
+    所以保留的检查都是**行号层面**的（与判定依据无关）：
+    1. 同一个分类里证据行不能重复
+    2. 证据行号必须在表里真实存在
+    3. **总账**：所有分类的证据行并集 == 有效数据行数（这才��「数量对上」）
+
+    去掉的三项（都依赖 AI 给的判定依据，误报率高）：
+    - unmatched：证据行不满足判定依据
+    - no-basis：未提供判定依据
+    - omission：有行满足依据却未被计入
     """
     v = Verification(categories=len(cats))
     for c in cats:
@@ -234,30 +241,22 @@ def verify_categories(
         if missing:
             c.verified = False
             c.notes.append(f"[missing-row] {len(missing)} 个行号在表中不存在")
-        unmatched = [
-            r for r in c.rows if r in rows_by_no and not _match_text(rows_by_no[r], c.match)
-        ]
-        if unmatched:
-            c.verified = False
-            c.notes.append(f"[unmatched] {len(unmatched)} 个证据行不满足判定依据")
-        if not c.match.get("keywords") and not c.match.get("value"):
-            c.notes.append("[no-basis] 未提供判定依据，仅校验数量")
 
-    if check_omission:
-        covered = {r for c in cats for r in c.rows}
-        for c in cats:
-            if not c.match.get("keywords") and not c.match.get("value"):
-                continue
-            extra = [
-                r
-                for r, row in rows_by_no.items()
-                if r not in covered and _match_text(row, c.match)
-            ]
-            if extra:
-                c.verified = False
-                c.notes.append(f"[omission] 有 {len(extra)} 行也满足依据但未被计入")
-    v.verified = all(c.verified for c in cats) if cats else True
-    v.issues = [f"{c.name}：{'；'.join(c.notes)}" for c in cats if c.notes]
+    # 总账：各分类的证据行并集应当覆盖全部有效数据行（不多不少）
+    covered = {r for c in cats for r in c.rows}
+    total = len(rows_by_no)
+    total_issue = ""
+    if cats and len(covered) != total:
+        total_issue = (
+            f"[total] 分类证据行合计 {len(covered)} 行，"
+            f"与有效数据行 {total} 行对不上（差 {total - len(covered)} 行）"
+        )
+
+    v.verified = v.verified and not total_issue and all(c.verified for c in cats)
+    issues = [f"{c.name}：{'；'.join(c.notes)}" for c in cats if c.notes]
+    if total_issue:
+        issues.append(total_issue)
+    v.issues = issues
     return v
 
 
@@ -672,7 +671,7 @@ async def summarize_sheet(
         cats = _parse_categories(raw)
 
         # 校验不通过时带纠正指令重试一次
-        v = verify_categories(cats, rows_by_no, check_omission=False)
+        v = verify_categories(cats, rows_by_no)
         if not v.verified and MAX_BLOCK_RETRIES:
             correction = (
                 "上一次输出有问题，请修正后重新输出 JSON：\n"
@@ -696,7 +695,7 @@ async def summarize_sheet(
     # 归一化分类名（同义词合并、碎片并入）—— 保证「格式不变」
     # 合并后做**完整**校验（含漏计）—— 分块时各块行号区间不重叠，
     # 合并后才有完整视野，才能查出「漏计」
-    v = verify_categories(merged, rows_by_no, check_omission=True)
+    v = verify_categories(merged, rows_by_no)
 
     text = await _compose_text(
         merged, ai_client, call_ai, model, max_tokens, temperature

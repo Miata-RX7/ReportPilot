@@ -176,21 +176,42 @@ async function onGenerate(file: ReportFile) {
   }
 }
 
-/** 溯源：某个分类对应的证据行原文 */
-const traceRows = ref<Record<number, { no: number; text: string }[]>>({})
-function showTrace(file: ReportFile, catIndex: number) {
-  const d = draftOf(file.id)
-  const cat = d?.categories[catIndex]
-  if (!cat) return
-  traceRows.value[file.id] = cat.rows.map((no) => ({
-    no,
-    text: `第 ${no} 行属于「${cat.name}」`,
-  }))
-}
+/** 溯源：某个分类对应的证据行原文（按 `${fileId}:${catIndex}` 存） */
+const traceRows = ref<Record<string, { no: number; text: string }[]>>({})
+/** 当前展开的气泡（同一时刻只开一个） */
+const traceOpenFor = ref('')
 
+function toggleTrace(key: string) {
+  const [fileId, ci] = key.split(':')
+  const d = draftOf(Number(fileId))
+  const cat = d?.categories[Number(ci)]
+  if (!cat) return
+  if (traceOpenFor.value === key) {
+    traceOpenFor.value = ''
+    return
+  }
+  traceRows.value[key] = cat.rows.map((no) => ({ no, text: `第 ${no} 行` }))
+  traceOpenFor.value = key
+}
 async function onConfirm() {
   confirming.value = true
   try {
+    // 总结文本为空 -> 不允许确认发送（用户 2026-11-03 要求）
+    const emptyDrafts = Object.entries(drafts.value).filter(
+      ([, d]) => !d.text.trim(),
+    )
+    if (emptyDrafts.length) {
+      const names = emptyDrafts
+        .map(([fileId]) => files.value.find((f) => f.id === Number(fileId))?.filename)
+        .filter(Boolean)
+      ElMessage.warning(
+        names.length
+          ? `总结为空，无法确认发送：${names.join('、')}`
+          : '总结为空，无法确认发送',
+      )
+      return
+    }
+
     const used = new Map<string, number>()
     for (const [fileId, d] of Object.entries(drafts.value)) {
       if (!d.text.trim()) continue
@@ -404,13 +425,29 @@ onMounted(load)
             >
               <span class="trace-row__name">{{ cat.name }}</span>
               <span class="trace-row__count">{{ cat.count }}</span>
-              <el-button link type="primary" @click="showTrace(f, ci)">查看依据</el-button>
+              <el-popover
+                :visible="traceOpenFor === `${f.id}:${ci}`"
+                placement="top"
+                trigger="click"
+                popper-class="trace-bubble"
+                :width="260"
+                @update:visible="(v: boolean) => { if (!v) traceOpenFor = '' }"
+              >
+                <template #reference>
+                  <el-button link type="primary" @click="toggleTrace(`${f.id}:${ci}`)">
+                    查看依据
+                  </el-button>
+                </template>
+                <div class="trace-bubble__title">{{ cat.name }}</div>
+                <div class="trace-bubble__list">
+                  <div v-for="r in traceRows[`${f.id}:${ci}`] ?? []" :key="r.no">
+                    {{ r.text }}
+                  </div>
+                </div>
+              </el-popover>
               <span v-if="!cat.verified" class="trace-row__warn">{{ cat.notes?.join('；') }}</span>
             </div>
-            <div v-if="traceRows[f.id]?.length" class="trace-detail">
-              <div v-for="r in traceRows[f.id]" :key="r.no">{{ r.text }}</div>
-            </div>
-          </div>
+</div>
         </div>
       </div>
 
@@ -598,6 +635,26 @@ onMounted(load)
 .trace-row__warn {
   color: var(--color-warning, #c2410c);
 }
+/* 溯源气泡：类似微信聊天气泡 —— 圆角矩形 + 指向性小尾巴 */
+:global(.trace-bubble.el-popover) {
+  padding: 8px 10px;
+  border-radius: 10px;
+}
+:global(.trace-bubble.el-popper .el-popper__arrow::before) {
+  border-radius: 10px;
+}
+:global(.trace-bubble .trace-bubble__title) {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+:global(.trace-bubble .trace-bubble__list) {
+  max-height: 220px;
+  overflow: auto;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--color-text-secondary, #64748b);
+}
+
 .trace-detail {
   margin: var(--space-1) 0 var(--space-2) var(--space-3);
   padding-left: var(--space-2);
