@@ -34,7 +34,7 @@ def upgrade() -> None:
     op.create_table(
         "report_task_files",
         sa.Column("id", sa.Integer(), primary_key=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         sa.Column("report_id", sa.Integer(), nullable=False),
         sa.Column("task_id", sa.Integer(), nullable=True),
         sa.Column("filename", sa.String(length=255), nullable=False),
@@ -55,7 +55,7 @@ def upgrade() -> None:
     op.create_table(
         "report_summaries",
         sa.Column("id", sa.Integer(), primary_key=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         sa.Column("report_id", sa.Integer(), nullable=False),
         sa.Column("file_id", sa.Integer(), nullable=False),
         sa.Column("placeholder", sa.String(length=128), nullable=False),
