@@ -233,6 +233,23 @@ async function onConfirm() {
       .filter((x) => x !== null)
 
     await confirmApi.confirm(reportId.value, token.value, summaries)
+    // 未上传文件的占位 -> 明确告知（否则用户点了没反应，
+    // 不知道那段在报告里会留占位文字）
+    const noFile = summaryPlaceholders.value.filter((ph) => !fileOf(ph))
+    if (noFile.length) {
+      ElMessage.warning(
+        `本期未上传：${noFile.map((ph) => labelOf(ph)).join('、')} —— `
+        + '报告里这几段会保留占位文字',
+      )
+    }
+
+    const { data } = await confirmApi.confirm(
+      reportId.value,
+      token.value,
+      summaries,
+    )
+    // **必须把结果赋给 result** —— 模板靠它切换到「已确认并发送」的结果页
+    result.value = data
     ElMessage.success('已确认并发送')
   } catch (error) {
     ElMessage.error(parseApiError(error).message)
@@ -530,6 +547,9 @@ onMounted(load)
 }
 
 .confirm-actions {
+  margin-top: var(--space-4, 16px);
+  padding-top: var(--space-3, 12px);
+  border-top: 1px solid var(--color-border-light, #e2e8f0);
   margin-top: 24px;
   text-align: center;
 }
