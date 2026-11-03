@@ -15,6 +15,10 @@
 连带删除占位符绑定（template_bindings.version_id 外键已 CASCADE，这里显式删
 更保险）与磁盘上的文档文件 —— 文件只在「裁剪后没有任何版本再引用它」时才删。
 
+**实现注意**：全部用子查询 + 标量参数，**不用 IN (:ids) 元组**。
+asyncpg 驱动不支持 SQLAlchemy 的 expanding=True 绑定（它用 $1 位置参数），
+会报 ``syntax error at or near "$1"``（实测踩过）。
+
 Revision ID: 0020
 Revises: 0019
 """
@@ -25,7 +29,6 @@ from typing import Sequence, Union
 
 import sqlalchemy as sa
 from alembic import op
-from sqlalchemy import bindparam
 
 revision: str = "0020"
 down_revision: Union[str, None] = "0019"
@@ -36,82 +39,78 @@ logger = logging.getLogger("alembic.runtime.migration")
 
 KEEP = 10
 
+# 排名子查询：按模板分组，version_no 倒序
+_RANKED = """
+SELECT id,
+       ROW_NUMBER() OVER (
+           PARTITION BY template_id ORDER BY version_no DESC
+       ) AS rn
+FROM template_versions
+"""
+
+# 受保护：当前版本 + 被报告引用的版本
+_PROTECTED = """
+id NOT IN (
+    SELECT current_version_id FROM word_templates
+    WHERE current_version_id IS NOT NULL
+)
+AND id NOT IN (
+    SELECT version_id FROM reports WHERE version_id IS NOT NULL
+)
+"""
+
+# 待删版本：每个模板超出 KEEP 个的最旧版本，排除受保护的
+_DELETE_CANDIDATES = (
+    "SELECT id, version_no, file_path, template_id FROM template_versions "
+    "WHERE id IN (SELECT id FROM (" + _RANKED + ") ranked WHERE ranked.rn > :keep) "
+    "AND " + _PROTECTED
+)
+
+# 真正删版本行的语句（上面那个是 SELECT 拿候选，这里才是 DELETE）
+_DELETE_ROWS = (
+    "DELETE FROM template_versions " 
+    "WHERE id IN (SELECT id FROM (" + _RANKED + ") ranked WHERE ranked.rn > :keep) " 
+    "AND " + _PROTECTED
+)
+
+# 裁剪后仍被引用的文件路径（这些文件不能删：共享路径 / 模板当前快照）
+_REMAINING_PATHS = (
+    "SELECT DISTINCT file_path FROM template_versions "
+    "WHERE file_path IS NOT NULL "
+    "AND id NOT IN (SELECT id FROM (" + _RANKED + ") ranked WHERE ranked.rn > :keep) "
+    "AND " + _PROTECTED +
+    " UNION SELECT file_path FROM word_templates WHERE file_path IS NOT NULL"
+)
+
 
 def upgrade() -> None:
     conn = op.get_bind()
 
-    # 1) 找出每个模板超出 KEEP 个的最旧版本（排除受保护的两类）
-    rows = conn.execute(
-        sa.text(
-            """
-            SELECT v.id, v.version_no, v.file_path
-            FROM template_versions v
-            WHERE v.id IN (
-                SELECT id FROM (
-                    SELECT id,
-                           ROW_NUMBER() OVER (
-                               PARTITION BY template_id ORDER BY version_no DESC
-                           ) AS rn
-                    FROM template_versions
-                ) ranked
-                WHERE ranked.rn > :keep
-            )
-            AND v.id NOT IN (
-                SELECT current_version_id FROM word_templates
-                WHERE current_version_id IS NOT NULL
-            )
-            AND v.id NOT IN (
-                SELECT version_id FROM reports WHERE version_id IS NOT NULL
-            )
-            """
-        ),
-        {"keep": KEEP},
-    ).fetchall()
-
+    rows = conn.execute(sa.text(_DELETE_CANDIDATES), {"keep": KEEP}).fetchall()
     if not rows:
         logger.info("没有超出上限的模板版本，无需清理")
         return
 
-    ids = [r.id for r in rows]
-    # 2) 裁剪后仍被引用的文件路径（这些文件不能删）
+    # 裁剪后仍被引用的路径：这些文件不能删
     keep_paths = {
-        p
-        for (p,) in conn.execute(
-            sa.text(
-                """
-                SELECT DISTINCT file_path FROM template_versions
-                WHERE id NOT IN :ids AND file_path IS NOT NULL
-                """
-            ),
-            {"ids": tuple(ids)},
-        ).fetchall()
+        p for (p,) in conn.execute(sa.text(_REMAINING_PATHS), {"keep": KEEP}).fetchall()
     }
-    # 模板自身的当前快照路径同样不能删
-    for (p,) in conn.execute(
+
+    # 删绑定（外键已 CASCADE，显式删更保险）
+    conn.execute(
         sa.text(
-            "SELECT file_path FROM word_templates WHERE file_path IS NOT NULL"
-        )
-    ).fetchall():
-        keep_paths.add(p)
-
-    # 3) 删绑定（外键已 CASCADE，显式删更保险）
-    conn.execute(
-        sa.text("DELETE FROM template_bindings WHERE version_id IN :ids").bindparams(
-            bindparam("ids", expanding=True)
+            "DELETE FROM template_bindings WHERE version_id IN ("
+            "SELECT id FROM (" + _RANKED + ") ranked WHERE ranked.rn > :keep) "
+            "AND " + _PROTECTED.replace("id NOT IN", "version_id NOT IN")
         ),
-        {"ids": tuple(ids)},
+        {"keep": KEEP},
     )
-    # 4) 删版本行
-    conn.execute(
-        sa.text("DELETE FROM template_versions WHERE id IN :ids").bindparams(
-            bindparam("ids", expanding=True)
-        ),
-        {"ids": tuple(ids)},
-    )
+    # 删版本行
+    conn.execute(sa.text(_DELETE_ROWS), {"keep": KEEP})
 
-    # 5) 删磁盘文件（best-effort：删不掉不该让迁移失败）
+    # 删磁盘文件（best-effort：删不掉不该让迁移失败）
     removed_files = 0
-    for _id, _no, file_path in rows:
+    for _id, _no, file_path, _tid in rows:
         if not file_path or file_path in keep_paths:
             continue
         try:
@@ -122,7 +121,7 @@ def upgrade() -> None:
 
     logger.info(
         "模板版本裁剪完成：删除 %d 个版本、%d 个文件（每模板保留 %d 个）",
-        len(ids),
+        len(rows),
         removed_files,
         KEEP,
     )
