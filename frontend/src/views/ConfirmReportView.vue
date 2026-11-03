@@ -113,6 +113,20 @@ async function onUpload(file: File) {
   }
 }
 
+/**
+ * 默认占位名。
+ *
+ * **优先用模板里声明的第一个总结占位**（用户不用选就能对上）；
+ * 模板里没有总结占位时才退回 summary_{fileId}。
+ *
+ * 注意不能用中文前缀：占位变量名只允许 ASCII 字母数字下划线
+ * （docx_parser.VAR_RE，且 Jinja 也要求如此），中文名会被判为非法语法，
+ * 导致 ONLYOFFICE 保存被拒、编辑内容丢失（2026-11-03 线上事故）。
+ */
+function defaultPlaceholder(fileId: number): string {
+  return summaryPlaceholders.value[0] ?? `summary_${fileId}`
+}
+
 function draftOf(fileId: number) {
   return drafts.value[fileId]
 }
@@ -122,7 +136,7 @@ function setDraft(
   patch: Partial<{ placeholder: string; prompt: string; text: string }>,
 ) {
   const cur = drafts.value[fileId] ?? {
-    placeholder: `总结_${fileId}`,
+    placeholder: defaultPlaceholder(fileId),
     prompt: '',
     text: '',
     categories: [],
@@ -139,7 +153,7 @@ async function onGenerate(file: ReportFile) {
       prompt: d?.prompt ?? '',
     })
     drafts.value[file.id] = {
-      placeholder: d?.placeholder ?? `总结_${file.id}`,
+      placeholder: d?.placeholder ?? defaultPlaceholder(file.id),
       prompt: d?.prompt ?? '',
       text: data.text,
       categories: data.categories,
@@ -172,7 +186,7 @@ async function onConfirm() {
       .filter(([, d]) => d.text.trim())
       .map(([fileId, d]) => ({
         file_id: Number(fileId),
-        placeholder: d.placeholder || `总结_${fileId}`,
+        placeholder: d.placeholder || defaultPlaceholder(Number(fileId)),
         prompt: d.prompt,
         text: d.text,
         categories: d.categories,

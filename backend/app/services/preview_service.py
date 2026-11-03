@@ -24,7 +24,13 @@ from app.schemas.metric import MetricFact
 from app.services.adapters.base import DataSourceAdapter
 from app.services.calc_engine import MetricComputeError, compute_metric, pie_labels
 from app.services.chart_renderer import render_fact_chart
-from app.services.docx_renderer import RenderError, open_template, render_docx
+from app.services.docx_renderer import (
+    SUMMARY_PLACEHOLDER_TEXT,
+    RenderError,
+    open_template,
+    render_docx,
+    template_variables,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -210,6 +216,21 @@ def make_image_factory(tpl: Any) -> Callable[..., Any]:
     return factory
 
 
+def summary_placeholders_of(tpl: Any) -> list[str]:
+    """模板里声明的「总结类」占位名。
+
+    这些占位**不参与模板绑定**，但 docxtpl 渲染时必须在 context 里有值
+    （Jinja 对未定义变量直接抛 UndefinedError），所以要按模板声明逐个填。
+    """
+    from app.services.docx_renderer import is_summary_placeholder
+
+    try:
+        names = template_variables(tpl)
+    except Exception:
+        return []
+    return sorted(n for n in names if is_summary_placeholder(n))
+
+
 def build_context(
     bindings: list[TemplateBinding],
     facts_by_ph: dict[str, MetricFact],
@@ -218,6 +239,7 @@ def build_context(
     *,
     image_factory: Callable[[MetricFact], Any] | None = None,
     summary_texts: dict[str, str] | None = None,
+    template_summary_placeholders: list[str] | None = None,
 ) -> dict[str, Any]:
     """构建渲染 context。insight 槽位文本由调用方注入（槽位 key -> 文本）。
 
@@ -262,10 +284,17 @@ def build_context(
                 f"变量 {b.placeholder} 的绑定类型非法: {b.binding_type}"
             )
 
-    # 「总结_」占位不在 bindings 里（不参与绑定），单独注入
-    if summary_texts:
-        for ph, text in summary_texts.items():
-            context[ph] = text
+    # 总结类占位不在 bindings 里（不参与绑定），单独注入。
+    #
+    # 两条安全网：
+    # 1. **只注入模板里确实存在的占位**：多注入的会让 context 出现
+    #    模板没有的 key -> check_context 判为「多余」报错，整份报告渲染失败。
+    # 2. **模板里的总结占位全部要有值**：没有内容就填提示文字。
+    #    docxtpl 的 Jinja 对未定义变量会直接抛 UndefinedError。
+    tpl_summary_phs = list(template_summary_placeholders or [])
+    for ph in tpl_summary_phs:
+        context[ph] = (summary_texts or {}).get(ph, SUMMARY_PLACEHOLDER_TEXT)
+    # summary_texts 里模板没有的占位：一律忽略（见上消释）
     return context
 
 
@@ -295,6 +324,7 @@ async def render_preview(
             metrics_by_ph,
             {},
             image_factory=make_image_factory(tpl),
+            template_summary_placeholders=summary_placeholders_of(tpl),
         )
         return render_docx(tpl_path, context, output, tpl=tpl)
     except RenderError as exc:
