@@ -14,6 +14,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.services.docx_renderer import SUMMARY_PLACEHOLDER_PREFIX
 from app.models.template import (
     TemplateBinding,
     TemplateGrant,
@@ -136,10 +137,14 @@ async def bindings_for_version(
 async def count_bindings_by_version(
     db: AsyncSession,
 ) -> dict[int, int]:
+    # 总结类占位（summary_ 前缀）不参与绑定，不计入绑定数：
+    # 否则「绑定进度」的分母已经排除了它，分子还是它 -> 总是不能用。
     rows = await db.execute(
-        select(TemplateBinding.version_id, func.count()).group_by(
-            TemplateBinding.version_id
+        select(TemplateBinding.version_id, func.count())
+        .where(
+            ~TemplateBinding.placeholder.startswith(SUMMARY_PLACEHOLDER_PREFIX)
         )
+        .group_by(TemplateBinding.version_id)
     )
     return dict(rows.all())
 

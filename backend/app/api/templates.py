@@ -93,6 +93,22 @@ def _sanitize_filename(raw: str) -> str:
     return name or "template.docx"
 
 
+def _bindable_placeholders(version: TemplateVersion | None) -> list[str]:
+    """需要绑定的占位名（**排除总结类占位**）。
+
+    总结类占位（summary_ 前缀）由确认页上传 Excel 后 AI 生成、渲染时注入，
+    不参与绑定。所以它既不该计入「未绑定」，也不该计入「绑定进度」的分母 ——
+    否则模板列表永远显示「5/6 已绑定」而不是「已全部绑定」。
+    """
+    if version is None:
+        return []
+    return [
+        p
+        for p in (version.placeholders_json or [])
+        if not is_summary_placeholder(p)
+    ]
+
+
 async def _read_limited(file: UploadFile) -> bytes:
     buf = bytearray()
     while chunk := await file.read(1024 * 1024):
@@ -116,7 +132,7 @@ def _version_read(tpl: WordTemplate, version: TemplateVersion) -> VersionRead:
         id=version.id,
         version_no=version.version_no,
         file_name=Path(version.file_path).name,
-        placeholder_count=len(version.placeholders_json or []),
+        placeholder_count=len(_bindable_placeholders(version)),
         source=version.source,
         is_current=version.id == tpl.current_version_id,
         created_at=version.created_at,
@@ -149,7 +165,8 @@ async def _to_detail(
             for n in names
         ],
         bindings=[BindingRead.model_validate(b) for b in bindings],
-        unbound=[p for p in names if p not in bound],
+        # 总结类占位不参与绑定，不计入「未绑定」
+        unbound=[p for p in names if p not in bound and not is_summary_placeholder(p)],
     )
 
 
@@ -247,7 +264,7 @@ async def list_templates(
                 id=tpl.id,
                 name=tpl.name,
                 file_name=Path(version.file_path).name if version else "",
-                placeholder_count=len(version.placeholders_json or []) if version else 0,
+                placeholder_count=len(_bindable_placeholders(version)),
                 bound_count=bound_counts.get(version.id, 0) if version else 0,
                 is_active=tpl.is_active,
                 created_at=tpl.created_at,
