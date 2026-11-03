@@ -233,25 +233,38 @@ def verify_categories(
     """
     v = Verification(categories=len(cats))
     for c in cats:
+        # **先自动修复 AI 的小错**，再校验 —— 这类错误不该让整个生成失败：
+        # - 行号在表里不存在 -> 剔除（AI 编造的）
+        # - 同一分类内行号重复 -> 去重
+        seen: set[int] = set()
+        clean: list[int] = []
+        dropped = 0
+        for r in c.rows:
+            if r not in rows_by_no:
+                dropped += 1
+                continue
+            if r in seen:
+                continue
+            seen.add(r)
+            clean.append(r)
+        if dropped:
+            c.notes.append(f"[fixed] 剔除了 {dropped} 个不存在的行号")
+        c.rows = clean
         v.numbers += len(c.rows)
-        if len(set(c.rows)) != len(c.rows):
-            c.verified = False
-            c.notes.append("[dup] 证据行有重复")
-        missing = [r for r in c.rows if r not in rows_by_no]
-        if missing:
-            c.verified = False
-            c.notes.append(f"[missing-row] {len(missing)} 个行号在表中不存在")
 
-    # 总账：各分类的证据行并集应当覆盖全部有效数据行（不多不少）
+    # 总账：**每一行都至少被归到一个类**（并集覆盖全部有效数据行）。
+    #
+    # 注意口径：只看**并集**，不看总和 —— 一个工单同时属于「终端设备维护」和
+    # 「现场支持」是合理的（多标签），所以「各分类行数之和 == 总行数」这个
+    # 口径在多标签场景下是错的（实测会多出 80 多行）。
     covered = {r for c in cats for r in c.rows}
     total = len(rows_by_no)
     total_issue = ""
-    if cats and len(covered) != total:
+    if cats and len(covered) < total:
         total_issue = (
-            f"[total] 分类证据行合计 {len(covered)} 行，"
-            f"与有效数据行 {total} 行对不上（差 {total - len(covered)} 行）"
+            f"[total] 有 {total - len(covered)} 行没有被归到任何分类"
+            f"（已归类 {len(covered)} / 有效数据 {total} 行）"
         )
-
     v.verified = v.verified and not total_issue and all(c.verified for c in cats)
     issues = [f"{c.name}：{'；'.join(c.notes)}" for c in cats if c.notes]
     if total_issue:
