@@ -398,7 +398,12 @@ _COMPOSE_PROMPT = """下面是一组已经统计好的分类计数，请把它�
 
 
 async def _compose_text(
-    cats: list[Category], ai_client: Any, call_ai: Any
+    cats: list[Category],
+    ai_client: Any,
+    call_ai: Any,
+    model: str,
+    max_tokens: int,
+    temperature: float,
 ) -> str:
     """把结构化计数写成一段通顺的话（数字全部来自统计结果，不允许 AI 自己算）。"""
     stats = "、".join(f"{c.name} {len(c.rows)}" for c in cats)
@@ -409,7 +414,10 @@ async def _compose_text(
             "content": _COMPOSE_PROMPT.format(stats=stats),
         },
     ]
-    return (await call_ai(ai_client, messages)).strip()
+    raw = await call_ai(
+        ai_client, model, messages, max_tokens=max_tokens, temperature=temperature
+    )
+    return raw.strip()
 
 
 async def summarize_sheet(
@@ -419,6 +427,9 @@ async def summarize_sheet(
     prompt: str,
     ai_client: Any,
     call_ai: Any,
+    model: str,
+    max_tokens: int = 4000,
+    temperature: float = 0.2,
 ) -> tuple[str, list[Category], Verification]:
     """对一张表做分类统计，产出总结文本 + 溯源数据。
 
@@ -444,7 +455,10 @@ async def summarize_sheet(
                 ),
             },
         ]
-        raw = await call_ai(ai_client, messages)
+        raw = await call_ai(
+            ai_client, model, messages,
+            max_tokens=max_tokens, temperature=temperature
+        )
         cats = _parse_categories(raw)
 
         # 校验不通过时带纠正指令重试一次
@@ -457,7 +471,10 @@ async def summarize_sheet(
             )
             messages.append({"role": "assistant", "content": raw})
             messages.append({"role": "user", "content": correction})
-            raw = await call_ai(ai_client, messages)
+            raw = await call_ai(
+                ai_client, model, messages,
+                max_tokens=max_tokens, temperature=temperature
+            )
             cats = _parse_categories(raw)
 
         collected.extend(cats)
@@ -467,7 +484,9 @@ async def summarize_sheet(
     # 合并后才有完整视野，才能查出「漏计」
     v = verify_categories(merged, rows_by_no, check_omission=True)
 
-    text = await _compose_text(merged, ai_client, call_ai)
+    text = await _compose_text(
+        merged, ai_client, call_ai, model, max_tokens, temperature
+    )
     # 段落里的数字必须与结构化计数一致（AI 措辞时改数能抓住）
     suspicious = verify_text_numbers(text, merged)
     if suspicious:

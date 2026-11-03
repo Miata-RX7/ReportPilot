@@ -124,7 +124,16 @@ async function onUpload(file: File) {
  * 导致 ONLYOFFICE 保存被拒、编辑内容丢失（2026-11-03 线上事故）。
  */
 function defaultPlaceholder(fileId: number): string {
-  return summaryPlaceholders.value[0] ?? `summary_${fileId}`
+  // 已被别的文件占用的占位不能再默认选 —— 否则两个文件都落到同一个占位，
+  // 后者会**静默覆盖**前者（save_summary 按 report_id+placeholder 唯一）。
+  const taken = new Set(
+    Object.entries(drafts.value)
+      .filter(([fid]) => Number(fid) !== fileId)
+      .map(([, d]) => d.placeholder)
+      .filter(Boolean),
+  )
+  const free = summaryPlaceholders.value.find((ph) => !taken.has(ph))
+  return free ?? `summary_${fileId}`
 }
 
 function draftOf(fileId: number) {
@@ -182,6 +191,18 @@ function showTrace(file: ReportFile, catIndex: number) {
 async function onConfirm() {
   confirming.value = true
   try {
+    const used = new Map<string, number>()
+    for (const [fileId, d] of Object.entries(drafts.value)) {
+      if (!d.text.trim()) continue
+      const prev = used.get(d.placeholder)
+      if (prev !== undefined) {
+        ElMessage.warning(
+          `两个文件都填到了占位「${d.placeholder}」，请改成不同的占位`,
+        )
+        return
+      }
+      used.set(d.placeholder, Number(fileId))
+    }
     const summaries = Object.entries(drafts.value)
       .filter(([, d]) => d.text.trim())
       .map(([fileId, d]) => ({
