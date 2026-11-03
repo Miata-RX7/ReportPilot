@@ -442,6 +442,13 @@ docker run --rm -v /opt/reportpilot/backend:/code -w /code reportpilot/backend:l
 **另一个已知的既有不稳定源**：`tests/test_chart_renderer.py::TestDispatch::test_pie_no_longer_placeholder`
 在本机因 matplotlib 字体缺失而失败，服务器上正常 —— 本地基线就是 1 failed。
 
+**还有一个更早就存在的偶发失败**：`tests/test_metrics_api.py::TestCRUD::test_list_includes_resolved_names`
+与 `::TestCompute::test_compute_end_to_end` 在**全量跑**时偶发失败（`sniffio.AsyncLibraryNotFoundError:
+unknown async library, or not in async context`），但**单独跑该文件或该用例必过**。
+2026-10-22 与 2026-11-03 各遇到一次（服务器与本机各一次），属于既有的事件循环时序问题，
+非本次改动引入。**判别方法**：单独跑通过 + 全量跑偶发失败 = 时序污染，不是逻辑错误。
+遇到时以**服务器裸容器全量跑的结果**为准，并记录发生频率。
+
 ## 6. 部署（概要）
 
 服务器连接参数（地址 / 端口 / 密钥路径）与外部服务凭据（Zabbix / DeepSeek / SMTP / ONLYOFFICE）
