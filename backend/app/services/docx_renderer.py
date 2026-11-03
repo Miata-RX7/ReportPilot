@@ -11,7 +11,7 @@ from typing import Any
 
 #: 「总结类」模板占位的前缀（{{ 总结_xxx }}）。这类占位不参与模板绑定，
 #: 由确认人在确认页上传文件后生成、确认时快照、渲染时注入。
-SUMMARY_PLACEHOLDER_PREFIX = "总结_"
+SUMMARY_PLACEHOLDER_PREFIX = "summary_"
 
 from docxtpl import DocxTemplate
 from jinja2.sandbox import SandboxedEnvironment
@@ -65,9 +65,9 @@ def check_context(tpl_vars: set[str], context: dict[str, Any]) -> None:
 
 
 def is_summary_placeholder(name: str) -> bool:
-    """是否为「总结类」占位（{{ 总结_xxx }}）。
+    """是否为「总结类」占位（{{ summary_xxx }}）。
 
-    命名约定：前缀「总结_」。这类占位不参与模板绑定，由确认人在确认页上传文件
+    命名约定：前缀「summary_」。这类占位不参与模板绑定，由确认人在确认页上传文件
     后生成、确认时快照、渲染时注入。
     """
     return name.strip().startswith(SUMMARY_PLACEHOLDER_PREFIX)

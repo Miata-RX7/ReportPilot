@@ -66,7 +66,7 @@ def _file(db, rep: Report, name: str) -> ReportTaskFile:
 
 class TestSummaryPlaceholder:
     def test_detection(self) -> None:
-        assert is_summary_placeholder("总结_工单汇总")
+        assert is_summary_placeholder("summary_workorder")
         assert not is_summary_placeholder("CPU使用率")
 
     async def test_snapshot_roundtrip(self, db) -> None:
