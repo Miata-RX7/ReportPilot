@@ -86,6 +86,8 @@ interface BindRow {
   aiConfig: InsightAIConfig
 }
 const bindRows = ref<BindRow[]>([])
+/** 总结类占位的显示名 {占位名: 显示名}，确认页用它替代机器名 */
+const summaryLabels = ref<Record<string, string>>({})
 
 /**
  * 是否是「总结类」占位。
@@ -266,6 +268,8 @@ async function openBinding(row: TemplateListItem) {
     bindName.value = row.name
     bindFilter.value = 'all'
     const byPh = new Map(data.bindings.map((b) => [b.placeholder, b]))
+    // 载入已有的显示名（模板级，跟着模板走而不是版本）
+    summaryLabels.value = { ...(data.summary_labels ?? {}) }
     bindRows.value = data.placeholders.map((p) => {
       const alone = p.is_alone_in_paragraph
       const b = byPh.get(p.name)
@@ -304,6 +308,13 @@ async function saveBindings() {
           : { placeholder: r.placeholder, binding_type: 'insight', ai_config: r.aiConfig },
       )
     await templateApi.putBindings(bindId.value, bindings)
+    // 显示名单独保存（它是模板级的属性，与版本绑定无关）
+    const labels = Object.fromEntries(
+      Object.entries(summaryLabels.value)
+        .map(([k, v]) => [k, String(v ?? '').trim()])
+        .filter(([, v]) => v),
+    )
+    await templateApi.putSummaryLabels(bindId.value, labels)
     ElMessage.success('绑定已保存')
     bindVisible.value = false
     await load()
@@ -689,6 +700,19 @@ async function onBatchDelete(): Promise<void> {
             </el-radio-group>
           </template>
         </el-table-column>
+        <el-table-column label="显示名" min-width="180">
+          <template #default="{ row }">
+            <el-input
+              v-if="row.type === 'summary'"
+              :model-value="summaryLabels[row.placeholder] ?? ''"
+              placeholder="如：资产信息（确认页显示）"
+              size="small"
+              data-testid="summary-label-input"
+              @update:model-value="(v: string) => (summaryLabels[row.placeholder] = v)"
+            />
+            <span v-else class="ph-no-label">—</span>
+          </template>
+        </el-table-column>
         <el-table-column label="绑定目标" min-width="220">
           <template #default="{ row }">
             <span v-if="row.type === 'summary'" class="bind-summary-note">
@@ -818,6 +842,9 @@ async function onBatchDelete(): Promise<void> {
 </template>
 
 <style scoped lang="scss">
+.ph-no-label {
+  color: var(--color-text-secondary, #94a3b8);
+}
 .bind-summary-note {
   font-size: var(--font-xs, 12px);
   color: var(--color-text-secondary, #64748b);

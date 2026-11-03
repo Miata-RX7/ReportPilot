@@ -32,6 +32,10 @@ export const templateApi = {
   },
   putBindings(id: number, bindings: BindingItem[]) {
     return http.put<BindingsResult>(`/templates/${id}/bindings`, { bindings })
+  },
+  /** 设置总结类占位的显示名（{占位名: 显示名}）—— 确认页显示它 */
+  putSummaryLabels(tplId: number, labels: Record<string, string>) {
+    return http.put<Record<string, string>>(`/templates/${tplId}/summary-labels`, { labels })
   },
   remove(id: number) {
     return http.delete<void>(`/templates/${id}`)

@@ -44,6 +44,7 @@ async function load() {
     const { data } = await confirmApi.preview(reportId.value, token.value)
     preview.value = data
     summaryPlaceholders.value = data.summary_placeholders ?? []
+    summaryLabels.value = data.summary_placeholder_labels ?? {}
     await loadFiles()
   } catch (error) {
     loadError.value = parseApiError(error).message
@@ -58,11 +59,17 @@ const files = ref<ReportFile[]>([])
 const uploading = ref(false)
 const generatingId = ref<number | null>(null)
 /** 每个文件的草稿：{file_id -> {prompt, text, categories, verification}} */
+/**
+ * 每个**占位**一个块：{占位名: {prompt, text, categories, verification}}。
+ *
+ * 按占位组织（而不是按文件）是因为「一个占位对应一个文件」——
+ * 模板里声明了几个总结占位，确认页就该有几个输入位，用户一眼知道要交什么，
+ * 也不会出现「两个文件选到同一个占位 -> 静默覆盖」。
+ */
 const drafts = ref<
   Record<
-    number,
+    string,
     {
-      placeholder: string
       prompt: string
       text: string
       categories: SummaryDraft['categories']
@@ -70,18 +77,29 @@ const drafts = ref<
     }
   >
 >({})
-/** 模板里声明的「总结_」占位（由后端随报告概要一起给出），供用户挑选 */
+/** 模板里声明的「总结_」占位（由后端随报告概要一起给出） */
 const summaryPlaceholders = ref<string[]>([])
+/** {占位名: 显示名}，如 { summary_assets_info: '资产信息' } */
+const summaryLabels = ref<Record<string, string>>({})
+
+/** 占位的业务名称（没配显示名时回退到占位名） */
+function labelOf(ph: string): string {
+  return summaryLabels.value[ph] ?? ph
+}
+
+/** 某个占位当前绑定的文件（一变量一文件） */
+function fileOf(ph: string): ReportFile | undefined {
+  return files.value.find((f) => f.summary?.placeholder === ph)
+}
 
 async function loadFiles() {
   try {
     const { data } = await reportFileApi.list(reportId.value, token.value)
     files.value = data
-    // 回显已生成的总结（重新打开页面时不丢）
+    // 回显已生成的总结（重新打开页面时不丢）—— 按占位存
     for (const f of data) {
       if (f.summary) {
-        drafts.value[f.id] = {
-          placeholder: f.summary.placeholder,
+        drafts.value[f.summary.placeholder] = {
           prompt: f.summary.prompt,
           text: f.summary.text,
           categories: f.summary.categories,
@@ -94,17 +112,20 @@ async function loadFiles() {
   }
 }
 
+
 /** el-upload 的 change 回调：模板内联表达式不支持 TS 断言，所以放脚本里 */
-function onFilePick(uploadFile: unknown) {
+/** el-upload 的 change 回调：模板内联表达式不支持 TS 断言，所以放脚本里 */
+function onFilePick(uploadFile: unknown, placeholder: string) {
   const f = uploadFile as { raw?: File } | undefined
-  if (f?.raw) void onUpload(f.raw)
+  if (f?.raw) void onUpload(f.raw, placeholder)
 }
 
-async function onUpload(file: File) {
+async function onUpload(file: File, placeholder: string) {
   uploading.value = true
   try {
-    await reportFileApi.upload(reportId.value, token.value, file)
-    ElMessage.success('文件已上传')
+    // **上传时就带上占位** —— 文件与占位的关系由此确定
+    await reportFileApi.upload(reportId.value, token.value, file, placeholder)
+    ElMessage.success(`已上传到「${labelOf(placeholder)}」`)
     await loadFiles()
   } catch (error) {
     ElMessage.error(parseApiError(error).message)
@@ -113,56 +134,39 @@ async function onUpload(file: File) {
   }
 }
 
-/**
- * 默认占位名。
- *
- * **优先用模板里声明的第一个总结占位**（用户不用选就能对上）；
- * 模板里没有总结占位时才退回 summary_{fileId}。
- *
- * 注意不能用中文前缀：占位变量名只允许 ASCII 字母数字下划线
- * （docx_parser.VAR_RE，且 Jinja 也要求如此），中文名会被判为非法语法，
- * 导致 ONLYOFFICE 保存被拒、编辑内容丢失（2026-11-03 线上事故）。
- */
-function defaultPlaceholder(fileId: number): string {
-  // 已被别的文件占用的占位不能再默认选 —— 否则两个文件都落到同一个占位，
-  // 后者会**静默覆盖**前者（save_summary 按 report_id+placeholder 唯一）。
-  const taken = new Set(
-    Object.entries(drafts.value)
-      .filter(([fid]) => Number(fid) !== fileId)
-      .map(([, d]) => d.placeholder)
-      .filter(Boolean),
-  )
-  const free = summaryPlaceholders.value.find((ph) => !taken.has(ph))
-  return free ?? `summary_${fileId}`
-}
 
-function draftOf(fileId: number) {
-  return drafts.value[fileId]
+function draftOf(placeholder: string) {
+  return drafts.value[placeholder]
 }
 
 function setDraft(
-  fileId: number,
-  patch: Partial<{ placeholder: string; prompt: string; text: string }>,
+  placeholder: string,
+  patch: Partial<{ prompt: string; text: string }>,
 ) {
-  const cur = drafts.value[fileId] ?? {
-    placeholder: defaultPlaceholder(fileId),
+  const cur = drafts.value[placeholder] ?? {
     prompt: '',
     text: '',
     categories: [],
     verification: { categories: 0, numbers: 0, verified: true, issues: [] },
   }
-  drafts.value[fileId] = { ...cur, ...patch }
+  drafts.value[placeholder] = { ...cur, ...patch }
 }
 
-async function onGenerate(file: ReportFile) {
-  generatingId.value = file.id
+
+
+async function onGenerate(placeholder: string) {
+  const f = fileOf(placeholder)
+  if (!f) {
+    ElMessage.warning(`请先为「${labelOf(placeholder)}」上传 Excel 文件`)
+    return
+  }
+  generatingId.value = f.id
   try {
-    const d = draftOf(file.id)
-    const { data } = await reportFileApi.summarize(reportId.value, file.id, token.value, {
+    const d = draftOf(placeholder)
+    const { data } = await reportFileApi.summarize(reportId.value, f.id, token.value, {
       prompt: d?.prompt ?? '',
     })
-    drafts.value[file.id] = {
-      placeholder: d?.placeholder ?? defaultPlaceholder(file.id),
+    drafts.value[placeholder] = {
       prompt: d?.prompt ?? '',
       text: data.text,
       categories: data.categories,
@@ -176,14 +180,16 @@ async function onGenerate(file: ReportFile) {
   }
 }
 
+
+
 /** 溯源：某个分类对应的证据行原文（按 `${fileId}:${catIndex}` 存） */
 const traceRows = ref<Record<string, { no: number; text: string }[]>>({})
 /** 当前展开的气泡（同一时刻只开一个） */
 const traceOpenFor = ref('')
 
 function toggleTrace(key: string) {
-  const [fileId, ci] = key.split(':')
-  const d = draftOf(Number(fileId))
+  const [placeholder, ci] = key.split(':')
+  const d = draftOf(placeholder)
   const cat = d?.categories[Number(ci)]
   if (!cat) return
   if (traceOpenFor.value === key) {
@@ -196,51 +202,40 @@ function toggleTrace(key: string) {
 async function onConfirm() {
   confirming.value = true
   try {
-    // 总结文本为空 -> 不允许确认发送（用户 2026-11-03 要求）
-    const emptyDrafts = Object.entries(drafts.value).filter(
-      ([, d]) => !d.text.trim(),
-    )
-    if (emptyDrafts.length) {
-      const names = emptyDrafts
-        .map(([fileId]) => files.value.find((f) => f.id === Number(fileId))?.filename)
-        .filter(Boolean)
+    // **有文件的占位必须有总结**；没上传文件的占位允许留空（提示一句即可）。
+    const missing = summaryPlaceholders.value.filter((ph) => {
+      const f = fileOf(ph)
+      if (!f) return false
+      return !draftOf(ph)?.text.trim()
+    })
+    if (missing.length) {
       ElMessage.warning(
-        names.length
-          ? `总结为空，无法确认发送：${names.join('、')}`
-          : '总结为空，无法确认发送',
+        `总结为空，无法确认发送：${missing.map((ph) => labelOf(ph)).join('、')}`,
       )
       return
     }
 
-    const used = new Map<string, number>()
-    for (const [fileId, d] of Object.entries(drafts.value)) {
-      if (!d.text.trim()) continue
-      const prev = used.get(d.placeholder)
-      if (prev !== undefined) {
-        ElMessage.warning(
-          `两个文件都填到了占位「${d.placeholder}」，请改成不同的占位`,
-        )
-        return
-      }
-      used.set(d.placeholder, Number(fileId))
-    }
-    const summaries = Object.entries(drafts.value)
-      .filter(([, d]) => d.text.trim())
-      .map(([fileId, d]) => ({
-        file_id: Number(fileId),
-        placeholder: d.placeholder || defaultPlaceholder(Number(fileId)),
-        prompt: d.prompt,
-        text: d.text,
-        categories: d.categories,
-        verification: d.verification,
-      }))
-    const { data } = await confirmApi.confirm(reportId.value, token.value, summaries)
-    result.value = data
-    ElMessage.success(data.message)
+    const summaries = summaryPlaceholders.value
+      .map((ph) => {
+        const f = fileOf(ph)
+        const d = draftOf(ph)
+        const text = d?.text.trim() ?? ''
+        if (!f || !text) return null
+        return {
+          file_id: f.id,
+          placeholder: ph,
+          prompt: d?.prompt ?? '',
+          text,
+          categories: d?.categories ?? [],
+          verification: d?.verification ?? { categories: 0, numbers: 0, verified: true, issues: [] },
+        }
+      })
+      .filter((x) => x !== null)
+
+    await confirmApi.confirm(reportId.value, token.value, summaries)
+    ElMessage.success('已确认并发送')
   } catch (error) {
     ElMessage.error(parseApiError(error).message)
-    // token 可能已被别人用掉，刷新状态
-    await load()
   } finally {
     confirming.value = false
   }
@@ -332,124 +327,110 @@ onMounted(load)
 
         <div class="confirm-actions">
           <!-- 上传的本期数据文件 + AI 生成的总结（2026-11-03） -->
-      <div class="data-files">
-        <div class="data-files__head">
-          <span class="data-files__title">本期数据文件与总结</span>
-          <span class="data-files__hint">
-            上传明细 Excel，系统会按表格内容做分类统计并生成总结；可自行编辑后确认。
-          </span>
-        </div>
+<div class="data-files">
+  <div class="data-files__head">
+    <span class="data-files__title">本期数据文件与总结</span>
+    <span class="data-files__hint">
+      模板里每个总结占位对应一个输入位：上传明细 Excel，系统按表格内容做分类统计并生成总结；可自行编辑后确认。
+    </span>
+  </div>
 
-        <div class="data-files__upload">
-          <el-upload
-            :auto-upload="false"
-            :show-file-list="false"
-            accept=".xlsx,.xlsm"
-            :on-change="onFilePick"
-          >
-            <el-button :loading="uploading">上传 Excel 文件</el-button>
-          </el-upload>
-        </div>
+  <div v-for="ph in summaryPlaceholders" :key="ph" class="data-file">
+    <div class="data-file__head">
+      <span class="data-file__name">{{ labelOf(ph) }}</span>
+      <span class="data-file__meta">{{ ph }}</span>
+    </div>
 
-        <div v-for="f in files" :key="f.id" class="data-file">
-          <div class="data-file__head">
-            <span class="data-file__name">{{ f.filename }}</span>
-            <span class="data-file__meta">{{ f.row_count }} 行数据</span>
-          </div>
+    <!-- 该占位对应的文件（一变量一文件） -->
+    <div class="data-file__ph">
+      <template v-if="fileOf(ph)">
+        <span class="data-file__name">{{ fileOf(ph)?.filename }}</span>
+        <span class="data-file__meta">{{ fileOf(ph)?.row_count }} 行数据</span>
+      </template>
+      <template v-else>
+        <el-upload
+          :auto-upload="false"
+          :show-file-list="false"
+          accept=".xlsx,.xlsm"
+          :on-change="(f: unknown) => onFilePick(f, ph)"
+        >
+          <el-button :loading="uploading" size="small">上传 Excel</el-button>
+        </el-upload>
+        <span class="data-file__meta">本期未上传（可留空）</span>
+      </template>
+    </div>
 
-          <!-- 占位选择：这个总结填到模板的哪一处 -->
-          <div class="data-file__ph">
-            <span class="data-file__ph-label">填入占位</span>
-            <el-select
-              :model-value="draftOf(f.id)?.placeholder ?? ''"
-              placeholder="选择模板中的总结占位"
-              size="small"
-              data-testid="summary-placeholder"
-              @update:model-value="(v: string) => setDraft(f.id, { placeholder: v })"
-            >
-              <el-option
-                v-for="ph in summaryPlaceholders"
-                :key="ph"
-                :label="ph"
-                :value="ph"
-              />
-              <el-option
-                v-if="!summaryPlaceholders.includes(draftOf(f.id)?.placeholder ?? '')"
-                :label="draftOf(f.id)?.placeholder ?? ''"
-                :value="draftOf(f.id)?.placeholder ?? ''"
-              />
-            </el-select>
-          </div>
+    <el-input
+      :model-value="draftOf(ph)?.prompt ?? ''"
+      placeholder="写作要求（可留空）。例如：按处理类型分类统计并列数数量"
+      size="small"
+      data-testid="summary-prompt"
+      @update:model-value="(v: string) => setDraft(ph, { prompt: v })"
+    />
 
-          <el-input
-            :model-value="draftOf(f.id)?.prompt ?? ''"
-            placeholder="写作要求（可留空）。例如：按处理类型分类统计并列数数量"
-            data-testid="summary-prompt"
-            @update:model-value="(v: string) => setDraft(f.id, { prompt: v })"
-          />
+    <div class="data-file__actions">
+      <el-button
+        type="primary"
+        plain
+        :loading="generatingId === fileOf(ph)?.id"
+        :disabled="!fileOf(ph)"
+        data-testid="summary-generate"
+        @click="onGenerate(ph)"
+      >
+        AI 生成总结
+      </el-button>
+    </div>
 
-          <div class="data-file__actions">
-            <el-button
-              type="primary"
-              plain
-              :loading="generatingId === f.id"
-              data-testid="summary-generate"
-              @click="onGenerate(f)"
-            >
-              AI 生成总结
-            </el-button>
-          </div>
+    <el-input
+      :model-value="draftOf(ph)?.text ?? ''"
+      type="textarea"
+      :rows="4"
+      placeholder="总结文本（AI 生成后可自行编辑）"
+      data-testid="summary-text"
+      @update:model-value="(v: string) => setDraft(ph, { text: v })"
+    />
 
-          <el-input
-            :model-value="draftOf(f.id)?.text ?? ''"
-            type="textarea"
-            :rows="4"
-            placeholder="总结文本（AI 生成后可自行编辑）"
-            data-testid="summary-text"
-            @update:model-value="(v: string) => setDraft(f.id, { text: v })"
-          />
-
-          <!-- 溯源：数字指得出具体的行 -->
-          <div v-if="draftOf(f.id)?.categories?.length" class="data-file__trace">
-            <div class="data-file__trace-head">
-              共 {{ draftOf(f.id)?.verification?.categories ?? 0 }} 个分类 ·
-              {{ draftOf(f.id)?.verification?.numbers ?? 0 }} 个数字 ·
-              <span :class="draftOf(f.id)?.verification?.verified ? 'ok' : 'warn'">
-                {{ draftOf(f.id)?.verification?.verified ? '全部可溯源' : '有待确认项' }}
-              </span>
-            </div>
-            <div
-              v-for="(cat, ci) in draftOf(f.id)?.categories ?? []"
-              :key="cat.name"
-              class="trace-row"
-            >
-              <span class="trace-row__name">{{ cat.name }}</span>
-              <span class="trace-row__count">{{ cat.count }}</span>
-              <el-popover
-                :visible="traceOpenFor === `${f.id}:${ci}`"
-                placement="top"
-                trigger="click"
-                popper-class="trace-bubble"
-                :width="260"
-                @update:visible="(v: boolean) => { if (!v) traceOpenFor = '' }"
-              >
-                <template #reference>
-                  <el-button link type="primary" @click="toggleTrace(`${f.id}:${ci}`)">
-                    查看依据
-                  </el-button>
-                </template>
-                <div class="trace-bubble__title">{{ cat.name }}</div>
-                <div class="trace-bubble__list">
-                  <div v-for="r in traceRows[`${f.id}:${ci}`] ?? []" :key="r.no">
-                    {{ r.text }}
-                  </div>
-                </div>
-              </el-popover>
-              <span v-if="!cat.verified" class="trace-row__warn">{{ cat.notes?.join('；') }}</span>
-            </div>
-</div>
-        </div>
+    <!-- 溯源：数字指得出具体的行 -->
+    <div v-if="draftOf(ph)?.categories?.length" class="data-file__trace">
+      <div class="data-file__trace-head">
+        共 {{ draftOf(ph)?.verification?.categories ?? 0 }} 个分类 ·
+        {{ draftOf(ph)?.verification?.numbers ?? 0 }} 个数字 ·
+        <span :class="draftOf(ph)?.verification?.verified ? 'ok' : 'warn'">
+          {{ draftOf(ph)?.verification?.verified ? '全部可溯源' : '有待确认项' }}
+        </span>
       </div>
+      <div
+        v-for="(cat, ci) in draftOf(ph)?.categories ?? []"
+        :key="cat.name"
+        class="trace-row"
+      >
+        <span class="trace-row__name">{{ cat.name }}</span>
+        <span class="trace-row__count">{{ cat.count }}</span>
+        <el-popover
+          :visible="traceOpenFor === `${ph}:${ci}`"
+          placement="top"
+          trigger="click"
+          popper-class="trace-bubble"
+          :width="260"
+          @update:visible="(v: boolean) => { if (!v) traceOpenFor = '' }"
+        >
+          <template #reference>
+            <el-button link type="primary" @click="toggleTrace(`${ph}:${ci}`)">
+              查看依据
+            </el-button>
+          </template>
+          <div class="trace-bubble__title">{{ cat.name }}</div>
+          <div class="trace-bubble__list">
+            <div v-for="r in traceRows[`${ph}:${ci}`] ?? []" :key="r.no">
+              {{ r.text }}
+            </div>
+          </div>
+        </el-popover>
+        <span v-if="!cat.verified" class="trace-row__warn">{{ cat.notes?.join('；') }}</span>
+      </div>
+    </div>
+  </div>
+</div>
 
       <el-button
             type="primary"

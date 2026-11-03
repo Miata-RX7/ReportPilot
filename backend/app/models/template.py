@@ -49,6 +49,9 @@ class WordTemplate(TimestampMixin, Base):
     # 当前版本的快照（渲染/列表用；随版本切换更新）
     file_path: Mapped[str] = mapped_column(String(512), default="")
     placeholders_json: Mapped[list[Any]] = mapped_column(JSONVariant, default=list)
+    # 总结类占位的**显示名**：{占位名: 业务名称}，如 {"summary_assets_info": "资产信息"}
+    # 跟着模板走而不是版本 —— 显示名是业务语义，不随模板版本变化
+    summary_labels_json: Mapped[dict[str, Any]] = mapped_column(JSONVariant, default=dict)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
 

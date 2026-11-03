@@ -492,6 +492,8 @@ export interface TemplateDetail {
   permission: TemplatePermission
   current_version: VersionRead | null
   placeholders: PlaceholderInfo[]
+  /** {占位名: 显示名}，总结类占位的业务名称（模板级） */
+  summary_labels?: Record<string, string>
   bindings: BindingRead[]
   unbound: string[]
 }
@@ -734,6 +736,8 @@ export interface ConfirmPreview {
   metric_count: number
   abnormal_count: number
   /** 模板里声明的「总结_」占位（不含大括号），确认人据此选择把总结填到哪一处 */
+  /** {占位名: 显示名}，如 { summary_assets_info: '资产信息' } */
+  summary_placeholder_labels?: Record<string, string>
   summary_placeholders?: string[]
   token_state: ConfirmTokenState
   message: string | null

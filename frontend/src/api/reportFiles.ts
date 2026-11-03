@@ -53,10 +53,14 @@ export const reportFileApi = {
   list(reportId: number, token: string) {
     return http.get<ReportFile[]>(`/report-files/${reportId}/files`, { params: { token } })
   },
-  upload(reportId: number, token: string, file: File) {
+  upload(reportId: number, token: string, file: File, placeholder?: string) {
     const fd = new FormData()
     fd.append('token', token)
     fd.append('file', file)
+    // **上传时就绑定占位**（一变量一文件）：文件与占位的关系由上传动作确定，
+    // 不需要事后用下拉去选 —— 下拉正是「两个文件选到同一占位 -> 静默覆盖」
+    // 的来源。
+    if (placeholder) fd.append('placeholder', placeholder)
     return http.post<ReportFile>(`/report-files/${reportId}/files`, fd)
   },
   summarize(

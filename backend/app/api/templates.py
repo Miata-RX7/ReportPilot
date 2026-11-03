@@ -40,6 +40,7 @@ from app.schemas.template import (
     BindingRead,
     BindingsResult,
     BindingsUpdate,
+    SummaryLabelsUpdate,
     EditorConfig,
     GrantRead,
     GrantsUpdate,
@@ -164,6 +165,8 @@ async def _to_detail(
             PlaceholderInfo(name=n, is_alone_in_paragraph=alone.get(n, False))
             for n in names
         ],
+        # 总结类占位的显示名（模板级）
+        summary_labels=dict(tpl.summary_labels_json or {}),
         bindings=[BindingRead.model_validate(b) for b in bindings],
         # 总结类占位不参与绑定，不计入「未绑定」
         unbound=[p for p in names if p not in bound and not is_summary_placeholder(p)],
@@ -317,6 +320,38 @@ async def activate_version(
     await db.commit()
     await db.refresh(tpl)
     return _version_read(tpl, version)
+
+
+@router.put("/{tpl_id}/summary-labels")
+async def put_summary_labels(
+    tpl_id: int,
+    payload: SummaryLabelsUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict[str, str]:
+    """设置总结类占位的显示名（{占位名: 显示名}）。
+
+    显示名给**确认页**用 —— 让业务人员看到「资产信息」而不是
+    ``summary_assets_info``。只接受模板里真实存在的总结类占位。
+    """
+    tpl = await _get_or_404(db, tpl_id)
+    await template_service.require_permission(db, tpl, current_user, "edit")
+    version = await template_service.get_current_version(db, tpl)
+    names = set(version.placeholders_json or []) if version else set()
+    valid = {n for n in names if is_summary_placeholder(n)}
+    labels: dict[str, str] = {}
+    for key, value in (payload.labels or {}).items():
+        if key not in valid:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                f"不是模板里的总结类占位: {key}",
+            )
+        text = str(value or "").strip()
+        if text:
+            labels[key] = text[:64]
+    tpl.summary_labels_json = labels
+    await db.commit()
+    return labels
 
 
 @router.put("/{tpl_id}/bindings", response_model=BindingsResult)

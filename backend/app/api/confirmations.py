@@ -17,6 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.models.template import WordTemplate
 from app.models.report import Report
 from app.models.template import TemplateVersion
 from app.schemas.report import ConfirmPreview, ConfirmRequest, ConfirmResult
@@ -68,6 +69,22 @@ def _summary(report: Report) -> tuple[str | None, int, int]:
     return summary_text, len(facts), abnormal
 
 
+async def _summary_labels(db: AsyncSession, report: Report) -> dict[str, str]:
+    """总结类占位的显示名 {占位名: 显示名}。
+
+    显示名存在**模板**上（word_templates.summary_labels_json）—— 它是业务语义，
+    不随模板版本变化。没配显示名的占位不出现在这里，前端回退显示占位名。
+    """
+    if report.template_id is None:
+        return {}
+    tpl = await db.get(WordTemplate, report.template_id)
+    if tpl is None:
+        return {}
+    labels = dict(tpl.summary_labels_json or {})
+    names = await _summary_placeholders(db, report)
+    return {k: v for k, v in labels.items() if k in names and v}
+
+
 async def _summary_placeholders(db: AsyncSession, report: Report) -> list[str]:
     """报告模板里声明的「总结_」占位。
 
@@ -104,6 +121,7 @@ async def preview_confirmation(
     summary, count, abnormal = _summary(report)
     return ConfirmPreview(
         summary_placeholders=await _summary_placeholders(db, report),
+        summary_placeholder_labels=await _summary_labels(db, report),
         report_id=report.id,
         report_name=name,
         period=report.period,
