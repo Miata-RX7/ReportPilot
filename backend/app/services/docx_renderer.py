@@ -13,6 +13,11 @@ from typing import Any
 #: 由确认人在确认页上传文件后生成、确认时快照、渲染时注入。
 SUMMARY_PLACEHOLDER_PREFIX = "summary_"
 
+#: 模板里的总结类占位没有内容时填的提示文字。
+#: 必须填、不能留空：模板声明了这个变量，而 docxtpl 的 Jinja 对
+#: 未定义变量会直接抛 UndefinedError，整份报告渲染失败。
+SUMMARY_PLACEHOLDER_TEXT = "[总结待生成]"
+
 from docxtpl import DocxTemplate
 from jinja2.sandbox import SandboxedEnvironment
 

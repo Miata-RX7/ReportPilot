@@ -39,6 +39,7 @@ from app.services.mailer import (
     send_report_email,
 )
 from app.services.preview_service import (
+    summary_placeholders_of,
     PreviewError,
     build_context,
     collect_facts,
@@ -322,6 +323,7 @@ def render_report_docx(
             metrics_by_ph,
             insight_texts,
             image_factory=make_image_factory(tpl),
+            template_summary_placeholders=summary_placeholders_of(tpl),
         )
         render_docx(tpl_path, context, output, tpl=tpl)
     except RenderError as exc:
@@ -680,6 +682,7 @@ async def rebuild_report_with_summaries(report_id: int) -> Path:
             insight_texts,
             image_factory=make_image_factory(tpl),
             summary_texts=texts,
+            template_summary_placeholders=summary_placeholders_of(tpl),
         )
         render_docx(Path(version.file_path), context, output, tpl=tpl)
         report.file_path = str(output)

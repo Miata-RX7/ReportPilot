@@ -80,16 +80,16 @@ class TestSummaryPlaceholder:
             db,
             rep,
             item,
-            placeholder="总结_工单汇总",
+            placeholder="summary_workorder",
             prompt="按处理类型统计",
             text="本月共处理账号权限 24 件。",
         )
         texts = await report_summary_service.summary_texts(db, rep.id)
-        assert texts["总结_工单汇总"] == "本月共处理账号权限 24 件。"
+        assert texts["summary_workorder"] == "本月共处理账号权限 24 件。"
 
         rows = await report_summary_service.list_summaries(db, rep.id)
         assert len(rows) == 1
-        assert rows[0].placeholder == "总结_工单汇总"
+        assert rows[0].placeholder == "summary_workorder"
 
     async def test_same_placeholder_overwritten(self, db) -> None:
         """同一占位重复保存应更新而不是新增两行。"""
@@ -99,7 +99,7 @@ class TestSummaryPlaceholder:
         await db.refresh(item)
         for text in ("第一版", "第二版"):
             await report_summary_service.save_summary(
-                db, rep, item, placeholder="总结_X", prompt="", text=text
+                db, rep, item, placeholder="summary_X", prompt="", text=text
             )
         rows = await report_summary_service.list_summaries(db, rep.id)
         assert len(rows) == 1

@@ -24,6 +24,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
+from app.services.docx_renderer import is_summary_placeholder
 from app.models.report import Report, ReportSummary, ReportTaskFile
 from app.services import file_summary
 from app.services.file_summary import Category, FileSummaryError, SheetData
@@ -196,6 +197,17 @@ async def save_summary(
     draft: SummaryDraft | None = None,
 ) -> ReportSummary:
     """写入/更新一条总结快照（同一 report + 占位只留一条）。"""
+    # 占位名必须是模板里存在的「总结类」变量（summary_ 前缀）。
+    # 存了别的名字（比如中文的「总结_xxx」）会导致：
+    # - 它不是模板声明的变量 -> build_context 注入时成为多余 key ->
+    #   check_context 判「多余」-> 整份报告渲染失败
+    # - 模板里真正的 summary_ 占位拿不到值 -> docxtpl Jinja 抛 UndefinedError
+    if not is_summary_placeholder(placeholder):
+        raise ValueError(
+            f"总结占位名非法: {placeholder!r}"
+            "（必须是 summary_ 前缀，且是模板里声明过的变量名）"
+        )
+
     existing = await db.scalar(
         select(ReportSummary).where(
             ReportSummary.report_id == report.id,
