@@ -8,6 +8,8 @@
 
 import logging
 
+from pathlib import Path
+
 from fastapi import HTTPException, status
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -142,6 +144,103 @@ async def count_bindings_by_version(
     return dict(rows.all())
 
 
+#: 每个模板保留的历史版本数上限（超出后自动裁剪最旧的）
+MAX_VERSIONS_PER_TEMPLATE = 10
+
+
+async def prune_old_versions(
+    db: AsyncSession,
+    template: WordTemplate,
+    *,
+    keep: int = MAX_VERSIONS_PER_TEMPLATE,
+) -> list[int]:
+    """裁剪超出上限的旧版本，返回被删除的版本号（从旧到新）。
+
+    规则：从新到旧数满 ``keep`` 个就停，其余进入候选。候选里再排除两类：
+
+    - **当前版本**（``template.current_version_id``）—— 删了模板就没法用了
+    - **被历史报告引用的版本**（``reports.version_id``）—— 删了那些老报告就无法
+      重渲染、无法回溯当时用的到底是哪一版模板
+
+    第 2 条还有数据库层兜底：``reports.version_id`` 的外键**没有** ondelete=CASCADE，
+    直接删会触发 FK 约束错误。显式排除 + 依赖该约束，双保险。
+
+    连带清理：该版本的占位符绑定、磁盘上的文档文件。**文件只在裁剪后没有任何
+    版本再引用它时才删** —— 共享路径时删了会连带弄坏另一个版本。
+    """
+    from app.models.report import Report
+
+    rows = list(
+        (
+            await db.scalars(
+                select(TemplateVersion)
+                .where(TemplateVersion.template_id == template.id)
+                .order_by(TemplateVersion.version_no.desc())
+            )
+        ).all()
+    )
+    if len(rows) <= keep:
+        return []
+
+    candidates = rows[keep:]
+    protected: set[int] = set()
+    if template.current_version_id:
+        protected.add(int(template.current_version_id))
+    referenced = await db.scalars(
+        select(Report.version_id).where(
+            Report.version_id.in_([v.id for v in candidates])
+        )
+    )
+    protected.update(int(r) for r in referenced if r is not None)
+
+    to_delete = [v for v in candidates if v.id not in protected]
+
+    # **先算一次**裁剪后仍被引用的文件路径集合。
+    # 不能边删边查：若 A、B 两个版本指向同一文件且都在待删列表里，先删 A 后
+    # 再查 B 就看不到 A 了，会把共享文件误删（实测踩过）。
+    remaining_paths = {
+        p
+        for (p,) in await db.execute(
+            select(TemplateVersion.file_path).where(
+                TemplateVersion.template_id == template.id,
+                TemplateVersion.id.notin_([v.id for v in to_delete]),
+            )
+        )
+        if p
+    }
+    if template.file_path:
+        remaining_paths.add(template.file_path)
+
+    removed: list[int] = []
+    for v in to_delete:
+        file_path = v.file_path
+        await db.execute(
+            delete(TemplateBinding).where(TemplateBinding.version_id == v.id)
+        )
+        await db.delete(v)
+        removed.append(v.version_no)
+        if file_path and file_path not in remaining_paths:
+            try:
+                Path(file_path).unlink(missing_ok=True)
+            except OSError as exc:
+                # 文件删不掉不该让版本裁剪失败 —— 库里已删干净，残留一个没人引用
+                # 的文件比整个操作回滚好
+                logger.warning(
+                    "版本裁剪后清理模板文件失败 path=%s err=%s", file_path, exc
+                )
+
+    await db.flush()
+    if removed:
+        # 升序返回（从旧到新），日志更好读
+        removed.sort()
+        logger.info(
+            "模板版本裁剪 template_id=%d 保留 %d 个，删除版本号 %s",
+            template.id,
+            keep,
+            removed,
+        )
+    return removed
+
 async def create_version(
     db: AsyncSession,
     template: WordTemplate,
@@ -209,6 +308,10 @@ async def create_version(
         len(added),
         cleared,
     )
+    # 版本上限：只保留最近 MAX_VERSIONS_PER_TEMPLATE 个历史版本。
+    # 放在 create_version 里而不是调用方，保证「谁建版本谁触发裁剪」，不会漏。
+    await prune_old_versions(db, template, keep=MAX_VERSIONS_PER_TEMPLATE)
+
     return version, removed, added, cleared
 
 
