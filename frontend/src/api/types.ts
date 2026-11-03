@@ -733,6 +733,8 @@ export interface ConfirmPreview {
   ai_summary: string | null
   metric_count: number
   abnormal_count: number
+  /** 模板里声明的「总结_」占位（不含大括号），确认人据此选择把总结填到哪一处 */
+  summary_placeholders?: string[]
   token_state: ConfirmTokenState
   message: string | null
 }

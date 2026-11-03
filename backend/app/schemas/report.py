@@ -154,6 +154,8 @@ class ConfirmPreview(BaseModel):
     ai_summary: str | None = None
     metric_count: int = 0
     abnormal_count: int = 0
+    #: 模板里声明的「总结_」占位（不含大括号），确认人据此选择把总结填到哪一处
+    summary_placeholders: list[str] = Field(default_factory=list)
     # token 校验结果：valid / invalid / used / expired
     token_state: Literal["valid", "invalid", "used", "expired"]
     message: str | None = None
@@ -161,6 +163,9 @@ class ConfirmPreview(BaseModel):
 
 class ConfirmRequest(BaseModel):
     token: str = Field(min_length=8, max_length=128)
+    #: 确认时提交的最终总结（人工编辑后的版本）。为空则不写快照，
+    #: 模板里的「总结_」占位会保持占位文字。
+    summaries: list["SummaryCommit"] = Field(default_factory=list)
 
 
 class ConfirmResult(BaseModel):
@@ -171,3 +176,56 @@ class ConfirmResult(BaseModel):
     push_status: Literal["pushed", "push_failed"]
     push_error: str | None = None
     message: str
+
+
+# ---------------------------------------------------------------------------
+# 确认页的数据文件与总结（2026-11-03）
+# ---------------------------------------------------------------------------
+
+
+class ReportSummaryRead(BaseModel):
+    """一段总结（含溯源与校验结果）。"""
+
+    placeholder: str
+    prompt: str = ""
+    text: str = ""
+    #: [{name, count, rows, match, verified, notes}] —— 溯源数据
+    categories: list[dict[str, Any]] = Field(default_factory=list)
+    #: {categories, numbers, verified, issues}
+    verification: dict[str, Any] = Field(default_factory=dict)
+
+
+class ReportFileRead(BaseModel):
+    """确认人上传的一个数据文件及其总结（若有）。"""
+
+    id: int
+    filename: str
+    size_bytes: int = 0
+    row_count: int = 0
+    columns: list[str] = Field(default_factory=list)
+    summary: ReportSummaryRead | None = None
+
+
+class SummaryDraftRead(BaseModel):
+    """AI 生成的总结草稿（尚未落库，确认人可反复重生成/编辑）。"""
+
+    text: str
+    categories: list[dict[str, Any]] = Field(default_factory=list)
+    verification: dict[str, Any] = Field(default_factory=dict)
+    sheet_name: str = ""
+    label_col: str = ""
+    row_count: int = 0
+
+
+class SummaryCommit(BaseModel):
+    """确认时提交的一条最终总结（人工编辑后的版本）。"""
+
+    file_id: int
+    placeholder: str
+    prompt: str = ""
+    text: str = ""
+    categories: list[dict[str, Any]] = Field(default_factory=list)
+    verification: dict[str, Any] = Field(default_factory=dict)
+
+# ConfirmRequest 里前向引用了 SummaryCommit（定义在其后），需要重建一次
+ConfirmRequest.model_rebuild()

@@ -15,6 +15,7 @@
 
 import logging
 import time
+from typing import Any
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -24,7 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.database import AsyncSessionLocal
 from app.models.metric import MetricDefinition
-from app.models.report import PushRecord, Report, ReportAudit
+from app.models.report import PushRecord, Report, ReportAudit, ReportSummary
 from app.models.template import TemplateBinding, TemplateVersion, WordTemplate
 from app.models.user import User
 from app.schemas.metric import MetricFact
@@ -557,13 +558,19 @@ async def _get_locked(db: AsyncSession, report_id: int) -> Report:
     return row
 
 
-async def confirm(report_id: int, raw_token: str) -> tuple[str, str]:
+async def confirm(
+    report_id: int,
+    raw_token: str,
+    summaries: list[dict[str, Any]] | None = None,
+) -> tuple[str, str]:
     """凭一次性 token 确认并立即推送。
 
     返回 (推送结果标识, 错误信息)；结果标识 ∈ pushed / push_failed。
 
     - SELECT ... FOR UPDATE 锁定行，并发点击只有一个成功（Q11）
     - token 不匹配 / 已使用 -> 明确报错，不静默失败
+    - ``summaries``：确认人最终提交的总结（人工编辑后的文本）。**快照**落库 ——
+      之后文件被替换也不影响本次报告的内容（2026-11-03）
     """
     async with AsyncSessionLocal() as db:
         report = await _get_locked(db, report_id)
@@ -578,6 +585,11 @@ async def confirm(report_id: int, raw_token: str) -> tuple[str, str]:
         expires = _aware(report.expires_at)
         if expires is not None and expires < datetime.now(timezone.utc):
             raise ReportError("确认链接已过期，请联系管理员重新发送")
+
+        # 总结快照（必须在清 token 之前写好：同一事务，失败一起回滚）
+        if summaries:
+            await _save_summary_snapshots(db, report, summaries)
+
         report.confirmation_token = None  # 一次性：确认后立即失效
         report.confirmed_at = datetime.now(timezone.utc)
         _set_status(report, "confirmed", "confirm")
@@ -590,8 +602,89 @@ async def confirm(report_id: int, raw_token: str) -> tuple[str, str]:
         )
         await db.commit()
 
+    # 有总结快照时**重渲染**报告：把总结填进「总结_」占位后再推送
+    if summaries:
+        try:
+            await rebuild_report_with_summaries(report_id)
+        except Exception:
+            logger.exception("报告重渲染失败（总结未写入）report_id=%d", report_id)
+
     ok, err = await push_confirmed(report_id, actor_id=None, action="push")
     return ("pushed" if ok else "push_failed"), err
+
+
+async def _save_summary_snapshots(
+    db: AsyncSession, report: Report, summaries: list[dict[str, Any]]
+) -> None:
+    """把确认人提交的总结写成快照。"""
+    from app.services import report_summary_service
+
+    files = {f.id: f for f in await report_summary_service.list_files(db, report.id)}
+    for s in summaries:
+        item = files.get(int(s.get("file_id") or 0))
+        if item is None:
+            logger.warning("确认提交的总结找不到对应文件，跳过 report_id=%d", report.id)
+            continue
+        await report_summary_service.save_summary(
+            db,
+            report,
+            item,
+            placeholder=str(s.get("placeholder") or ""),
+            prompt=str(s.get("prompt") or ""),
+            text=str(s.get("text") or ""),
+            draft=None,
+        )
+        # 溯源与校验结果直接沿用确认页传来的（那是最终版本）
+        row = await db.scalar(
+            select(ReportSummary).where(
+                ReportSummary.report_id == report.id,
+                ReportSummary.placeholder == str(s.get("placeholder") or ""),
+            )
+        )
+        if row is not None:
+            row.categories_json = list(s.get("categories") or [])
+            row.verification_json = dict(s.get("verification") or {})
+
+
+async def rebuild_report_with_summaries(report_id: int) -> Path:
+    """用总结快照重渲染报告 docx（覆盖 report.file_path）。
+
+    「总结_」占位在确认前是空的，确认后才有内容 —— 所以要重渲染一次。
+    """
+    from app.services import report_summary_service
+
+    async with AsyncSessionLocal() as db:
+        report = await db.get(Report, report_id)
+        if report is None:
+            raise ReportError("报告不存在")
+        template = await db.get(WordTemplate, report.template_id)
+        version = await db.get(TemplateVersion, report.version_id) if report.version_id else None
+        if template is None or version is None:
+            raise ReportError("报告模板或版本缺失，无法重渲染")
+        texts = await report_summary_service.summary_texts(db, report_id)
+        bindings, facts_by_ph, metrics_by_ph = await compute_template_facts(
+            db, version, report.period
+        )
+        # insight 槽位的文本存在报告的 insights_json 里（key 已归一到 placeholder 名）
+        insight_texts = {
+            k: str(v.get("text") or "")
+            for k, v in (report.insights_json or {}).items()
+            if isinstance(v, dict)
+        }
+        output = Path(get_settings().storage_dir) / "reports" / f"report_{report.id}_{report.period}.docx"
+        tpl = open_template(Path(version.file_path))
+        context = build_context(
+            bindings,
+            facts_by_ph,
+            metrics_by_ph,
+            insight_texts,
+            image_factory=make_image_factory(tpl),
+            summary_texts=texts,
+        )
+        render_docx(Path(version.file_path), context, output, tpl=tpl)
+        report.file_path = str(output)
+        await db.commit()
+        return output
 
 
 async def confirm_by_user(report_id: int, *, actor_id: int) -> tuple[str, str]:
@@ -820,11 +913,25 @@ async def _push_in_session(
         report_name = template.name if template else f"report_{report.id}"
         attachment = Path(report.file_path)
         recipients = list(report.recipient_emails or [])
+        # 确认人上传的原始数据文件作为附加附件（明细在附件里，不进正文）
+        from app.services import report_summary_service
+
+        extra_attachments = [
+            Path(f.stored_path)
+            for f in await report_summary_service.list_files(db, report_id)
+            if f.stored_path
+        ]
         attempt = await _next_attempt(db, report_id)
         started = time.perf_counter()
         err: str | None = None
         try:
-            await send_report_email(recipients, report_name, report.period, attachment)
+            await send_report_email(
+                recipients,
+                report_name,
+                report.period,
+                attachment,
+                extra_attachments=extra_attachments,
+            )
         except MailerError as exc:
             err = str(exc)
         duration_ms = int((time.perf_counter() - started) * 1000)

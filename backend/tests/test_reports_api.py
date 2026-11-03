@@ -77,8 +77,9 @@ def stub_mail(monkeypatch):
     """桩掉 SMTP：记录调用，避免真实发信。"""
     sent: list[dict] = []
 
-    async def fake_report(recipients, report_name, period, attachment_path):
-        sent.append({"kind": "report", "to": list(recipients), "period": period})
+    async def fake_report(
+    recipients, report_name, period, attachment_path, extra_attachments=None):
+        sent.append({"kind": "report", "to": list(recipients), "period": period, "extras": [p.name for p in (extra_attachments or [])]})
 
     async def fake_confirm(*, to, report_name, period, confirm_url, expires_at):
         sent.append({"kind": "confirmation", "to": to, "url": confirm_url})

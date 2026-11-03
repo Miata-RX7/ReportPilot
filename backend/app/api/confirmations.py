@@ -11,13 +11,17 @@ import logging
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from pathlib import Path
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models.report import Report
+from app.models.template import TemplateVersion
 from app.schemas.report import ConfirmPreview, ConfirmRequest, ConfirmResult
 from app.services import report_service
+from app.services.docx_renderer import open_template, template_variables
 from app.services.report_service import ReportError
 from app.services.task_service import token_matches
 
@@ -64,6 +68,27 @@ def _summary(report: Report) -> tuple[str | None, int, int]:
     return summary_text, len(facts), abnormal
 
 
+async def _summary_placeholders(db: AsyncSession, report: Report) -> list[str]:
+    """报告模板里声明的「总结_」占位。
+
+    这些占位**不参与模板绑定**（模板管理页不要求绑定），由确认人在确认页上传
+    文件后生成、确认时快照、渲染时注入。所以要把它们告诉确认人，让 TA 知道能把
+    总结填到哪一处。
+    """
+    from app.services.docx_renderer import is_summary_placeholder, template_variables
+
+    if report.version_id is None:
+        return []
+    version = await db.get(TemplateVersion, report.version_id)
+    if version is None or not version.file_path:
+        return []
+    try:
+        tpl = open_template(Path(version.file_path))
+    except Exception:
+        return []
+    return sorted(v for v in template_variables(tpl) if is_summary_placeholder(v))
+
+
 @router.get("/{report_id}", response_model=ConfirmPreview)
 async def preview_confirmation(
     report_id: int,
@@ -78,6 +103,7 @@ async def preview_confirmation(
     state, message = _state_of(report, token)
     summary, count, abnormal = _summary(report)
     return ConfirmPreview(
+        summary_placeholders=await _summary_placeholders(db, report),
         report_id=report.id,
         report_name=name,
         period=report.period,
@@ -107,7 +133,11 @@ async def confirm_report(
     if exists is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "报告不存在")
     try:
-        push_status, err = await report_service.confirm(report_id, payload.token)
+        push_status, err = await report_service.confirm(
+            report_id,
+            payload.token,
+            summaries=[s.model_dump() for s in payload.summaries],
+        )
     except ReportError as exc:
         # 明确报错（链接已使用 / 无效 / 过期），不静默失败
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None

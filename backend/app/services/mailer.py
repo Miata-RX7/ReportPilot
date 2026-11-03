@@ -56,8 +56,14 @@ async def send_report_email(
     report_name: str,
     period: str,
     attachment_path: Path,
+    extra_attachments: list[Path] | None = None,
 ) -> None:
-    """发送报告邮件（docx 附件）。失败抛 MailerError。"""
+    """发送报告邮件。
+
+    ``attachment_path`` 是报告 docx；``extra_attachments`` 是**确认人上传的原始
+    数据文件**（明细表放在附件里，不进 Word 正文 —— 200+ 行塞进正文会让文档
+    膨胀到几十页）。
+    """
     if not recipients:
         raise MailerError("接收人列表为空")
 
@@ -65,8 +71,15 @@ async def send_report_email(
     msg["Subject"] = f"【ReportPilot】{report_name} {period} {report_kind(period)}"
     msg["From"] = _from_address()
     msg["To"] = ", ".join(recipients)
+    extra_names = ""
+    if extra_attachments:
+        extra_names = (
+            "\n\n随附本期原始数据文件 "
+            + "、".join(p.name for p in extra_attachments)
+            + "，明细数据请查阅附件。"
+        )
     msg.set_content(
-        f"{report_name}（{period}）{report_kind(period)}已生成并通过确认，详见附件。\n\n"
+        f"{report_name}（{period}）{report_kind(period)}已生成并通过确认，详见附件。{extra_names}\n\n"
         "—— ReportPilot 报告自动化系统"
     )
     msg.add_attachment(
@@ -75,6 +88,18 @@ async def send_report_email(
         subtype=DOCX_SUBTYPE,
         filename=f"{report_name}_{period}.docx",
     )
+    # 原始数据文件作为附加附件（Excel 的 MIME 类型不好判断，按二进制流发，
+    # 收件人的邮件客户端会按扩展名识别）
+    for extra in extra_attachments or []:
+        if not extra.exists():
+            logger.warning("附加附件不存在，跳过: %s", extra)
+            continue
+        msg.add_attachment(
+            extra.read_bytes(),
+            maintype="application",
+            subtype="octet-stream",
+            filename=extra.name,
+        )
     try:
         await aiosmtplib.send(msg, **_base_kwargs())
     except Exception as exc:

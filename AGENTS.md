@@ -424,6 +424,24 @@ docker run --rm -v /opt/reportpilot/backend:/code -w /code reportpilot/backend:l
    追加回写会把中文变成乱码（本轮踩过）。用 `[System.IO.File]::ReadAllText/ReadAllLines/AppendAllText(..., UTF8)`
 
 ---
+### 5.12（2026-11-03）后端测试的导入时机纪律
+
+**模块级导入，不要在测试体内首次导入**：`app.services.docx_renderer` 会连带导入
+`docxtpl`，进而改变全局的 asyncio 事件循环状态。若在某个测试体内才首次导入它，
+而该测试文件按字母序又排在其他用例之前（如 `test_file_summary.py` 排在
+`test_metrics_api.py` 之前），后面用 `httpx.AsyncClient` 的用例会随机失败：
+
+    sniffio.AsyncLibraryNotFoundError: unknown async library, or not in async context
+
+**症状是「偶发」**：全量跑有时 3 failed、有时 1 failed；单独跑该文件却全绿。
+**判别方法**：把新测试文件移走再跑全量，若稳定了就是它引入的；
+再用二分法定位到具体那个测试体里的 import。
+**修法**：把该模块的导入提到**文件顶部**（collection 阶段，所有模块导入完再跑用例，
+导入时机就一致了）。
+
+**另一个已知的既有不稳定源**：`tests/test_chart_renderer.py::TestDispatch::test_pie_no_longer_placeholder`
+在本机因 matplotlib 字体缺失而失败，服务器上正常 —— 本地基线就是 1 failed。
+
 ## 6. 部署（概要）
 
 服务器连接参数（地址 / 端口 / 密钥路径）与外部服务凭据（Zabbix / DeepSeek / SMTP / ONLYOFFICE）
