@@ -74,7 +74,7 @@ class TestVerifyCategories:
         ]
         v = verify_categories(cats, rows)
         assert not v.verified
-        assert any("[missing-row]" in i for i in v.issues)
+        assert any("[fixed]" in i for i in v.issues)  # 不存在的行号被自动剔除
 
     def test_row_not_matching_criteria_is_tolerated(self) -> None:
         """证据行不满足判定依据 -> **不再**判不通过（用户要求：数量对上就行）。
