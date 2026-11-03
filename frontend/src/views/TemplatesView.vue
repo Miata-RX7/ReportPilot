@@ -628,6 +628,13 @@ async function onBatchDelete(): Promise<void> {
         <el-tab-pane label="未绑定" name="unbound" />
       </el-tabs>
 
+      <!-- 总结类占位的命名规则：变量名只能用 ASCII 标识符 -->
+      <div class="summary-ph-hint">
+        需要在报告里填 AI 总结的地方，请在 Word 里写 
+        <code>&#123;&#123; summary_workorder &#125;&#125;</code> 这样的变量名（
+        <strong>只能用英文字母/数字/下划线</strong>，中文会被判为非法语法）。
+        这类占位不需要绑定指标，确认人在确认页上传 Excel 后生成总结并填入。
+      </div>
       <el-table :data="filteredBindRows">
         <el-table-column label="Word 占位符" min-width="180">
           <template #default="{ row }">
@@ -774,6 +781,21 @@ async function onBatchDelete(): Promise<void> {
 </template>
 
 <style scoped lang="scss">
+.summary-ph-hint {
+  margin-bottom: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--font-xs, 12px);
+  color: var(--color-text-secondary, #64748b);
+  background: var(--color-bg, #f5f7fa);
+  border-radius: var(--radius-sm, 4px);
+  line-height: 1.7;
+}
+.summary-ph-hint code {
+  padding: 1px 4px;
+  background: #fff;
+  border: 1px solid var(--color-border-light, #e2e8f0);
+  border-radius: 3px;
+}
 .upload-tip {
   font-size: var(--font-xs);
 }

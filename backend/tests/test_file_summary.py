@@ -267,13 +267,13 @@ class TestSummaryPlaceholder:
     """
 
     def test_summary_placeholder_detection(self) -> None:
-        assert is_summary_placeholder("总结_工单汇总")
+        assert is_summary_placeholder("summary_workorder")
         assert not is_summary_placeholder("CPU使用率")
         assert not is_summary_placeholder("insight_1")
 
     def test_check_context_ignores_missing_summary_placeholder(self) -> None:
         """「总结_」占位缺失不算错误（它由确认快照运行时注入）。"""
         check_context({"CPU使用率"}, {"CPU使用率": "1"})
-        check_context({"CPU使用率", "总结_工单汇总"}, {"CPU使用率": "1"})
+        check_context({"CPU使用率", "summary_workorder"}, {"CPU使用率": "1"})
         with pytest.raises(RenderError):
             check_context({"CPU使用率"}, {})

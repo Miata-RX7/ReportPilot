@@ -85,3 +85,42 @@ class TestReject:
         path = make_docx(tmp_path / "t.docx", table_cells=["{{ a.b }}"])
         with pytest.raises(TemplateSyntaxError):
             parse_template(path)
+
+
+class TestPlaceholderNamingRules:
+    """变量名的合法字符集 —— 回归（2026-11-03 线上事故）。
+
+    背景：平台约定的「总结类」占位曾设计成 ``{{ 总结_xxx }}``（中文前缀），
+    但 VAR_RE 只允许 ASCII 标识符（Jinja/docxtpl 的变量名也必须如此），
+    于是用户照着提示在 Word 里输入中文占位后，ONLYOFFICE 保存被模板语法
+    校验拒绝 -> 不生成新版本 -> 界面却显示「已保存」，编辑内容丢失。
+
+    现在总结类占位统一用 ASCII 前缀 ``summary_``，并保留这条测试锁住规则。
+    """
+
+    def test_ascii_name_accepted(self) -> None:
+        from app.services.docx_parser import VAR_RE
+
+        m = VAR_RE.match("{{ summary_workorder }}")
+        assert m is not None and m.group(1) == "summary_workorder"
+
+    def test_chinese_name_rejected(self) -> None:
+        from app.services.docx_parser import VAR_RE
+
+        assert VAR_RE.match("{{ 总结_工单汇总 }}") is None
+
+    def test_spaces_around_name_allowed(self) -> None:
+        from app.services.docx_parser import VAR_RE
+
+        m = VAR_RE.match("{{ summary_workorder }}")
+        assert m is not None and m.group(1) == "summary_workorder"
+
+    def test_summary_prefix_detected(self) -> None:
+        from app.services.docx_renderer import (
+            SUMMARY_PLACEHOLDER_PREFIX,
+            is_summary_placeholder,
+        )
+
+        assert SUMMARY_PLACEHOLDER_PREFIX == "summary_"
+        assert is_summary_placeholder("summary_workorder")
+        assert not is_summary_placeholder("cpu_usage")

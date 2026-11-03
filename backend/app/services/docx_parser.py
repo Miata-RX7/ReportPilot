@@ -29,6 +29,10 @@ XML_PART_RE = re.compile(r"^word/(document|header\d*|footer\d*)\.xml$")
 VAR_RE = re.compile(r"^\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}$")
 # 疑似 Jinja 片段（{{ ... }} 或 {% ... %}）
 SUSPECT_RE = re.compile(r"\{\{.*?\}\}|\{%.*?%\}")
+# 变量名的合法字符集（与 Jinja 一致）：英文字母、数字、下划线
+# 【重要】中文变量名**不合法**：docxtpl/Jinja 的变量名只能用 ASCII 标识符，
+# 否则渲染时会报 Jinja 语法错误。所以「总结类」占位的前缀用 summary_
+VAR_NAME_HINT = "变量名只能用英文字母/数字/下划线（中文不行），例如 {{ summary_workorder }}"
 JINJA_DELIMITERS = ("{{", "}}", "{%", "%}")
 
 MAX_VIOLATIONS = 20
@@ -71,7 +75,10 @@ class TemplateSyntaxError(Exception):
     def __init__(self, violations: list[str]) -> None:
         self.violations = violations
         preview = "; ".join(violations[:5])
-        super().__init__(f"模板包含不支持的语法: {preview}")
+        # 附带命名规则：用户绕这个错很多，直接把规则写进报错里
+        super().__init__(
+            f"模板包含不支持的语法: {preview}（{VAR_NAME_HINT}）"
+        )
 
 
 def _iter_paragraph_texts(xml_bytes: bytes) -> list[str]:
