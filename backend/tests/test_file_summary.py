@@ -59,7 +59,7 @@ class TestVerifyCategories:
         v = verify_categories(cats, rows)
         # 第 4 行（权限变更）也含「权限」却没被计入 -> 漏计
         assert not v.verified
-        assert any("[omission]" in i for i in v.issues)
+        assert any("[total]" in i for i in v.issues)
 
     def test_missing_row_number_is_detected(self) -> None:
         """证据行号在表里不存在 -> 不通过。"""
@@ -76,21 +76,24 @@ class TestVerifyCategories:
         assert not v.verified
         assert any("[missing-row]" in i for i in v.issues)
 
-    def test_row_not_matching_criteria_is_detected(self) -> None:
-        """证据行不满足判定依据 -> 不通过。"""
+    def test_row_not_matching_criteria_is_tolerated(self) -> None:
+        """证据行不满足判定依据 -> **不再**判不通过（用户要求：数量对上就行）。
+
+        这类事项本身语义模糊，人为分都未必准，用机器卡「这行该不该属于这一类」
+        只会制造大量误报。
+        """
         sheet = _sheet()
         rows = {int(r["__row"]): r for r in sheet.rows}
         cats = [
             Category(
                 name="账号权限管理",
-                rows=[2, 3],  # 第 3 行是「终端重装」，不含账号/权限
+                rows=[2, 3, 4, 5, 6],  # 第 3 行是「终端重装」，不含账号/权限
                 match={"type": "keywords", "keywords": ["账号", "权限"]},
             )
         ]
         v = verify_categories(cats, rows)
-        assert not v.verified
-        assert any("[unmatched]" in i for i in v.issues)
-
+        assert v.verified, v.issues
+        assert not any("[unmatched]" in i for i in v.issues)
     def test_correct_classification_passes(self) -> None:
         """正确的分类应当通过（且不报漏计）。"""
         sheet = _sheet()
@@ -123,23 +126,21 @@ class TestVerifyCategories:
         cats = [
             Category(
                 name="终端维护",
-                rows=[3, 6],
+                rows=[2, 3, 4, 5, 6],  # 覆盖全部行：新口径校验的是总账
                 match={"type": "value", "column": "处理类型", "value": "终端维护"},
             )
         ]
         v = verify_categories(cats, rows)
         assert v.verified, v.issues
 
-    def test_no_match_basis_only_checks_count(self) -> None:
-        """没给依据 -> 只校验数量，并明确标注「未提供判定依据」。"""
+    def test_no_match_basis_is_fine(self) -> None:
+        """没给依据也不再报「未提供判定依据」—— 只看数量。"""
         sheet = _sheet()
         rows = {int(r["__row"]): r for r in sheet.rows}
-        cats = [Category(name="随便", rows=[2, 3])]
+        cats = [Category(name="随便", rows=[2, 3, 4, 5, 6])]
         v = verify_categories(cats, rows)
-        assert v.verified
-        assert any("[no-basis]" in n for c in cats for n in c.notes)
-
-
+        assert v.verified, v.issues
+        assert not any("[no-basis]" in n for c in cats for n in c.notes)
 class TestVerifyTextNumbers:
     """段落里的数字必须与结构化计数一致（AI 措辞时改数能抓住）。"""
 
