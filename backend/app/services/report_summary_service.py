@@ -161,6 +161,10 @@ async def generate_summary(
         prompt=prompt,
         ai_client=client,
         call_ai=_call_ai,
+        model=settings.ai_model,
+        # 分类统计要的是**准确**而不是文采：温度压低、token 给够
+        max_tokens=min(max(2000, len(sheet.rows) * 40), 16000),
+        temperature=0.2,
     )
     return SummaryDraft(
         text=text,

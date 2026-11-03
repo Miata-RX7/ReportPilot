@@ -14,6 +14,8 @@
 import asyncio
 
 import pytest
+from app.models.report import Report, ReportSummary
+from sqlalchemy import select
 import pytest_asyncio
 
 from app.services.docx_renderer import (
@@ -196,3 +198,74 @@ class TestUnboundExcludesSummary:
         bindings, facts, metrics = await compute_template_facts(db, v, "2026-09")
         assert bindings == []
         assert facts == {}
+
+
+class TestOneSummaryPerPlaceholder:
+    """一个占位只能由一个文件填（两个文件填同一占位会**静默覆盖**前者）。
+
+    前端已做校验并给出提示；后端 save_summary 是 upsert 语义
+    （按 report_id + placeholder 唯一），所以后端不会报错 —— 这正是
+    「静默覆盖」的原因，测试把该语义固定下来。
+    """
+
+    @pytest.mark.anyio
+    async def test_same_placeholder_updates_instead_of_duplicating(
+        self, db
+    ) -> None:
+        import uuid
+
+        from app.models.report import ReportTaskFile
+        from app.models.template import WordTemplate
+        from app.services.report_summary_service import save_summary
+
+        tpl = WordTemplate(name=f"t-{uuid.uuid4().hex[:8]}", file_path="/tmp/t.docx", owner_id=1)
+        db.add(tpl)
+        await db.flush()
+        rep = Report(
+            task_id=None,
+            template_id=tpl.id,
+            period="2026-09",
+            status="pending_confirmation",
+            facts_json=[],
+            insights_json={},
+        )
+        db.add(rep)
+        await db.flush()
+        f1 = ReportTaskFile(
+            report_id=rep.id,
+            filename="a.xlsx",
+            stored_path="/tmp/a.xlsx",
+            sha256="a" * 64,
+            size_bytes=1,
+            row_count=1,
+            columns_json=[],
+        )
+        f2 = ReportTaskFile(
+            report_id=rep.id,
+            filename="b.xlsx",
+            stored_path="/tmp/b.xlsx",
+            sha256="b" * 64,
+            size_bytes=1,
+            row_count=1,
+            columns_json=[],
+        )
+        db.add_all([f1, f2])
+        await db.commit()
+        await db.refresh(f1)
+        await db.refresh(f2)
+
+        await save_summary(
+            db, rep, f1, placeholder="summary_a", prompt="", text="第一份"
+        )
+        await save_summary(
+            db, rep, f2, placeholder="summary_a", prompt="", text="第二份"
+        )
+        rows = list(
+            (
+                await db.scalars(
+                    select(ReportSummary).where(ReportSummary.report_id == rep.id)
+                )
+            ).all()
+        )
+        assert len(rows) == 1, "同一占位不应产生两行（后者覆盖前者）"
+        assert rows[0].text == "第二份"
