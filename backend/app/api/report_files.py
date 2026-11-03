@@ -44,6 +44,17 @@ async def _report_or_404(db: AsyncSession, report_id: int) -> Report:
     return report
 
 
+async def report_template_placeholders(db: AsyncSession, report: Report) -> list[str]:
+    """报告所用模板当前版本里声明的占位。"""
+    if report.template_id is None:
+        return []
+    tpl = await db.get(WordTemplate, report.template_id)
+    if tpl is None:
+        return []
+    version = await db.get(TemplateVersion, tpl.current_version_id)
+    return list(version.placeholders_json or []) if version else []
+
+
 def _check_token(report: Report, token: str) -> None:
     """校验一次性 token。确认成功后 token 即失效，这里同样拒绝。"""
     if report.confirmation_token is None:
@@ -92,6 +103,7 @@ async def upload_report_file(
     report_id: int,
     token: str = Form(...),
     file: UploadFile = File(...),
+    placeholder: str | None = Form(None),
     db: AsyncSession = Depends(get_db),
 ) -> ReportFileRead:
     """确认人上传本期数据文件（Excel）。"""
@@ -109,6 +121,28 @@ async def upload_report_file(
         )
     except SummaryError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
+    # **上传时就绑定占位**（一变量一文件）：文件与占位的关系由上传动作确定，
+    # 不需要事后用下拉去选 —— 下拉正是「两个文件选到同一占位 -> 静默覆盖」
+    # 的来源。
+    if placeholder:
+        if not is_summary_placeholder(placeholder):
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                f"不是总结类占位: {placeholder}",
+            )
+        valid = {
+            n
+            for n in (await report_template_placeholders(db, report))
+            if is_summary_placeholder(n)
+        }
+        if placeholder not in valid:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                f"模板里没有这个总结占位: {placeholder}",
+            )
+        await report_summary_service.save_summary(
+            db, report, item, placeholder=placeholder, prompt="", text=""
+        )
     return ReportFileRead(
         id=item.id,
         filename=item.filename,

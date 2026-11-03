@@ -58,6 +58,13 @@ class InsightAIConfig(BaseModel):
         return data or None
 
 
+class SummaryLabelsUpdate(BaseModel):
+    """设置总结类占位的显示名。"""
+
+    # {占位名: 显示名}；值为空串表示清除该占位的显示名
+    labels: dict[str, str] = Field(default_factory=dict)
+
+
 class BindingItem(BaseModel):
     placeholder: str = Field(min_length=1, max_length=128)
     binding_type: Literal["metric", "insight"]
@@ -164,6 +171,8 @@ class TemplateDetail(BaseModel):
     permission: str
     current_version: VersionRead | None
     placeholders: list[PlaceholderInfo]
+    #: {占位名: 显示名}，总结类占位的业务名称（模板级）
+    summary_labels: dict[str, str] = Field(default_factory=dict)
     bindings: list[BindingRead]
     unbound: list[str]
 

@@ -156,6 +156,8 @@ class ConfirmPreview(BaseModel):
     abnormal_count: int = 0
     #: 模板里声明的「总结_」占位（不含大括号），确认人据此选择把总结填到哪一处
     summary_placeholders: list[str] = Field(default_factory=list)
+    #: {占位名: 显示名}，给确认页用（如 {"summary_assets_info": "资产信息"}）
+    summary_placeholder_labels: dict[str, str] = Field(default_factory=dict)
     # token 校验结果：valid / invalid / used / expired
     token_state: Literal["valid", "invalid", "used", "expired"]
     message: str | None = None
