@@ -60,6 +60,7 @@ from app.services.adapters.base import (
     AdapterConnectionError,
     AdapterPermissionError,
 )
+from app.services.docx_renderer import is_summary_placeholder
 from app.services.docx_parser import (
     TemplateSyntaxError,
     parse_template,
@@ -330,6 +331,14 @@ async def put_bindings(
             raise HTTPException(
                 status.HTTP_422_UNPROCESSABLE_ENTITY,
                 f"同一变量重复绑定: {item.placeholder}",
+            )
+        # 总结类占位（summary_ 前缀）**不参与绑定**：它由确认人在确认页
+        # 上传 Excel 后 AI 生成、确认时快照、渲染时注入。接收它会让后端查不到指标
+        # 而报「指标不存在」，报错不清楚。
+        if is_summary_placeholder(item.placeholder):
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                f"总结类变量 {item.placeholder} 不需要绑定（确认页上传 Excel 后自动填入））",
             )
         seen.add(item.placeholder)
         if item.binding_type == "metric":

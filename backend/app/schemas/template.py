@@ -3,6 +3,7 @@
 from datetime import datetime
 from typing import Any, Literal
 
+from app.services.docx_renderer import SUMMARY_PLACEHOLDER_PREFIX
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.services.ai_insight import (
@@ -67,6 +68,14 @@ class BindingItem(BaseModel):
 
     @model_validator(mode="after")
     def _check_binding(self) -> "BindingItem":
+        # 总结类占位（summary_ 前缀）**不参与绑定** —— 确认人在确认页上传 Excel
+        # 后由 AI 生成、确认时快照、渲染时注入。给出准确提示，而不是让人
+        # 以为是「指标绑定缺参数」。
+        if self.placeholder.startswith(SUMMARY_PLACEHOLDER_PREFIX):
+            raise ValueError(
+                f"总结类变量 {self.placeholder} 不需要绑定"
+                "（确认页上传 Excel 后自动填入）"
+            )
         if self.binding_type == "metric":
             if self.binding_ref_id is None:
                 raise ValueError("metric 绑定必须提供 binding_ref_id")

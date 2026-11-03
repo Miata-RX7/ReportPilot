@@ -77,7 +77,8 @@ const bindName = ref('')
 const bindFilter = ref<'all' | 'bound' | 'unbound'>('all')
 interface BindRow {
   placeholder: string
-  type: 'metric' | 'insight'
+  /** summary = 总结类占位（summary_ 前缀）：**不参与绑定**，渲染时由确认快照注入 */
+  type: 'metric' | 'insight' | 'summary'
   refId: number | null
   /** 变量是否独占段落（决定能否绑定图表类型指标） */
   alone: boolean
@@ -85,6 +86,20 @@ interface BindRow {
   aiConfig: InsightAIConfig
 }
 const bindRows = ref<BindRow[]>([])
+
+/**
+ * 是否是「总结类」占位。
+ *
+ * 命名约定：前缀 summary_（必须是 ASCII —— 变量名只允许英文字母/数字/下划线，
+ * 中文名会被 docx_parser 判为非法语法，见 docx_parser.VAR_RE）。
+ *
+ * 这类占位**不需要绑定**：它由确认人在确认页上传 Excel 后 AI 生成、确认时快照、
+ * 渲染时注入报告。所以它既不出现在绑定校验里，也不会提交给后端。
+ */
+const SUMMARY_PREFIX = 'summary_'
+function isSummaryPlaceholder(name: string): boolean {
+  return name.startsWith(SUMMARY_PREFIX)
+}
 
 /* ---- AI 摘要配置（提示词 + 参考范文 + 试跑） ---- */
 const aiCfgVisible = ref(false)
@@ -159,7 +174,9 @@ function rowChartError(row: BindRow): string | null {
 }
 const filteredBindRows = computed(() => {
   if (bindFilter.value === 'all') return bindRows.value
-  const isBound = (r: { type: string; refId: number | null }) => r.type === 'insight' || r.refId !== null
+  // summary（总结类占位）不参与绑定，别把它算进「未绑定」里
+  const isBound = (r: { type: string; refId: number | null }) =>
+    r.type === 'insight' || r.type === 'summary' || r.refId !== null
   return bindRows.value.filter((r) => (bindFilter.value === 'bound' ? isBound(r) : !isBound(r)))
 })
 
@@ -253,6 +270,9 @@ async function openBinding(row: TemplateListItem) {
       const alone = p.is_alone_in_paragraph
       const b = byPh.get(p.name)
       const base = { placeholder: p.name, alone, aiConfig: {} as InsightAIConfig }
+      // 总结类占位不参与绑定：标成 summary 类型，界面上只做说明
+      if (isSummaryPlaceholder(p.name))
+        return { ...base, type: 'summary' as const, refId: null }
       if (b && b.binding_type === 'insight')
         return { ...base, type: 'insight' as const, refId: null, aiConfig: b.ai_config ?? {} }
       if (b && b.binding_type === 'metric')
@@ -274,11 +294,15 @@ async function saveBindings() {
   }
   bindSubmitting.value = true
   try {
-    const bindings: BindingItem[] = bindRows.value.map((r) =>
-      r.type === 'metric'
-        ? { placeholder: r.placeholder, binding_type: 'metric', binding_ref_id: r.refId }
-        : { placeholder: r.placeholder, binding_type: 'insight', ai_config: r.aiConfig },
-    )
+    // **总结类占位不提交**：它不参与绑定（渲染时由确认快照注入）。
+    // 若提交上去（type=metric 且 refId=null），后端会查不到指标而报 422。
+    const bindings: BindingItem[] = bindRows.value
+      .filter((r) => r.type !== 'summary')
+      .map((r) =>
+        r.type === 'metric'
+          ? { placeholder: r.placeholder, binding_type: 'metric', binding_ref_id: r.refId }
+          : { placeholder: r.placeholder, binding_type: 'insight', ai_config: r.aiConfig },
+      )
     await templateApi.putBindings(bindId.value, bindings)
     ElMessage.success('绑定已保存')
     bindVisible.value = false
@@ -649,7 +673,17 @@ async function onBatchDelete(): Promise<void> {
         </el-table-column>
         <el-table-column label="类型" width="190">
           <template #default="{ row }">
-            <el-radio-group v-model="row.type">
+            <!-- 总结类占位不参与绑定：说明即可，不给「指标/AI摘要」选项 -->
+            <el-tooltip
+              v-if="row.type === 'summary'"
+              content="总结类占位：确认人在确认页上传 Excel 后由 AI 生成并填入，不需要绑定指标"
+              placement="top"
+            >
+              <span class="soft-tag soft-tag--accent mix-tag" data-testid="ph-summary-tag">
+                运行时填充
+              </span>
+            </el-tooltip>
+            <el-radio-group v-else v-model="row.type">
               <el-radio label="metric">指标</el-radio>
               <el-radio label="insight">AI 摘要</el-radio>
             </el-radio-group>
@@ -657,8 +691,11 @@ async function onBatchDelete(): Promise<void> {
         </el-table-column>
         <el-table-column label="绑定目标" min-width="220">
           <template #default="{ row }">
+            <span v-if="row.type === 'summary'" class="bind-summary-note">
+              确认页上传 Excel 后由 AI 生成
+            </span>
             <el-select
-              v-if="row.type === 'metric'"
+              v-else-if="row.type === 'metric'"
               v-model="row.refId"
               placeholder="选择指标"
               filterable
@@ -781,6 +818,10 @@ async function onBatchDelete(): Promise<void> {
 </template>
 
 <style scoped lang="scss">
+.bind-summary-note {
+  font-size: var(--font-xs, 12px);
+  color: var(--color-text-secondary, #64748b);
+}
 .summary-ph-hint {
   margin-bottom: var(--space-2);
   padding: var(--space-2) var(--space-3);

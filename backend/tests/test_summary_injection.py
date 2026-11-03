@@ -90,3 +90,41 @@ class TestPlaceholderNaming:
                     text="x",
                 )
             )
+
+
+class TestSummaryNotBindable:
+    """总结类占位**不参与绑定**（用户 2026-11-03 反馈：绑定时提示「未完成绑定」）。
+
+    前端把它标成 summary 类型、不参与未绑定校验、不提交给后端；
+    后端也明确拒绝并给出可操作的提示，而不是含糊的「绑定的指标不存在」。
+    """
+
+    def test_frontend_prefix_helper(self) -> None:
+        """前端用的判定与后端保持一致：summary_ 前缀。"""
+        from app.services.docx_renderer import SUMMARY_PLACEHOLDER_PREFIX
+
+        assert SUMMARY_PLACEHOLDER_PREFIX == "summary_"
+
+    def test_backend_rejects_summary_binding(self) -> None:
+        """提交 summary_ 占位的绑定 -> schema 层就拒绝，且提示要说清原因。
+
+        第一道防线在 schema（BindingItem 的校验器）：总结类占位不参与绑定，
+        报错必须说「不需要绑定」，而不是让人以为是「指标绑定缺参数」。
+        """
+        from pydantic import ValidationError
+
+        from app.schemas.template import BindingsUpdate
+
+        with pytest.raises(ValidationError) as exc:
+            BindingsUpdate(
+                bindings=[
+                    {
+                        "placeholder": "summary_workorder",
+                        "binding_type": "metric",
+                        "binding_ref_id": None,
+                    }
+                ]
+            )
+        msg = str(exc.value)
+        assert "summary_workorder" in msg
+        assert "不需要绑定" in msg
