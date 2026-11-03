@@ -14,12 +14,30 @@
 import asyncio
 
 import pytest
+import pytest_asyncio
 
 from app.services.docx_renderer import (
     SUMMARY_PLACEHOLDER_TEXT,
     check_context,
     is_summary_placeholder,
 )
+
+
+@pytest_asyncio.fixture
+async def db():
+    """内存库：给需要落库的用例用。"""
+    import pytest_asyncio
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from app.models import Base
+
+    engine = create_async_engine("sqlite+aiosqlite://")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    async with maker() as session:
+        yield session
+    await engine.dispose()
 
 
 class TestSummaryInjection:
@@ -128,3 +146,53 @@ class TestSummaryNotBindable:
         msg = str(exc.value)
         assert "summary_workorder" in msg
         assert "不需要绑定" in msg
+
+
+class TestUnboundExcludesSummary:
+    """「未绑定」判定必须排除总结类占位。
+
+    线上事故（2026-11-03）：报告任务手动触发生成失败，提示
+    「以下变量未绑定: ['summary_workorder']」—— 生成路径上的未绑定校验
+    （preview_service.compute_template_facts）没排除总结类占位。
+    """
+
+    def test_bindable_placeholders_excludes_summary(self) -> None:
+        from app.api.templates import _bindable_placeholders
+        from app.models.template import TemplateVersion
+
+        v = TemplateVersion(
+            template_id=1,
+            version_no=1,
+            file_path="/tmp/a.docx",
+            placeholders_json=["summary_workorder", "cpu_usage", "aaa"],
+        )
+        assert _bindable_placeholders(v) == ["cpu_usage", "aaa"]
+
+    def test_bindable_placeholders_none_version(self) -> None:
+        from app.api.templates import _bindable_placeholders
+
+        assert _bindable_placeholders(None) == []
+
+    @pytest.mark.anyio
+    async def test_compute_template_facts_allows_unbound_summary(
+        self, db, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """模板里有未绑定的 summary_ 占位时，计算阶段不应报错。"""
+        from app.models.template import TemplateVersion, WordTemplate
+        from app.services.preview_service import compute_template_facts
+
+        tpl = WordTemplate(name="t", file_path="/tmp/t.docx", owner_id=1)
+        db.add(tpl)
+        await db.flush()
+        v = TemplateVersion(
+            template_id=tpl.id,
+            version_no=1,
+            file_path="/tmp/t.docx",
+            placeholders_json=["summary_workorder"],
+        )
+        db.add(v)
+        await db.commit()
+
+        bindings, facts, metrics = await compute_template_facts(db, v, "2026-09")
+        assert bindings == []
+        assert facts == {}

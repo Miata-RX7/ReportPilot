@@ -25,6 +25,7 @@ from app.services.adapters.base import DataSourceAdapter
 from app.services.calc_engine import MetricComputeError, compute_metric, pie_labels
 from app.services.chart_renderer import render_fact_chart
 from app.services.docx_renderer import (
+    is_summary_placeholder,
     SUMMARY_PLACEHOLDER_TEXT,
     RenderError,
     open_template,
@@ -111,7 +112,14 @@ async def compute_template_facts(
         ).all()
     )
     bound = {b.placeholder for b in bindings}
-    unbound = [p for p in version.placeholders_json if p not in bound]
+    # 总结类占位（summary_ 前缀）**不需要绑定**：它由确认人在确认页
+    # 上传 Excel 后 AI 生成、确认时快照、渲染时注入。将它计入「未绑定」会让
+    # 整份报告生成失败（用户反馈…生成失败 以下变量未绑定: ['summary_workorder']……）。
+    unbound = [
+        p
+        for p in version.placeholders_json
+        if p not in bound and not is_summary_placeholder(p)
+    ]
     if unbound:
         raise PreviewError(f"以下变量未绑定: {unbound}")
 
