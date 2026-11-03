@@ -32,8 +32,13 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def _report_or_404(db: AsyncSession, report_id: int) -> Report:
-    report = db.get(Report, report_id)
+async def _report_or_404(db: AsyncSession, report_id: int) -> Report:
+    """取报告，不存在则 404。
+
+    注意必须 ``await db.get(...)`` —— AsyncSession.get 是协程，忘了 await 会拿到
+    一个 coroutine 对象而不是行，后续访问属性直接 500（实测踩过）。
+    """
+    report = await db.get(Report, report_id)
     if report is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "报告不存在")
     return report
@@ -54,7 +59,7 @@ async def list_report_files(
     db: AsyncSession = Depends(get_db),
 ) -> list[ReportFileRead]:
     """确认页列出已上传的文件与已生成的总结。"""
-    report = _report_or_404(db, report_id)
+    report = await _report_or_404(db, report_id)
     _check_token(report, token)
     files = await report_summary_service.list_files(db, report_id)
     summaries = await report_summary_service.list_summaries(db, report_id)
@@ -90,7 +95,7 @@ async def upload_report_file(
     db: AsyncSession = Depends(get_db),
 ) -> ReportFileRead:
     """确认人上传本期数据文件（Excel）。"""
-    report = _report_or_404(db, report_id)
+    report = await _report_or_404(db, report_id)
     _check_token(report, token)
     name = file.filename or "upload.xlsx"
     if not name.lower().endswith((".xlsx", ".xlsm")):
@@ -128,7 +133,7 @@ async def generate_report_summary(
     刻意不落库：确认人可能反复调整提示词重新生成，满意了再在确认动作里
     提交最终文本。只有确认时写入的才是快照。
     """
-    report = _report_or_404(db, report_id)
+    report = await _report_or_404(db, report_id)
     _check_token(report, token)
     files = await report_summary_service.list_files(db, report_id)
     item = next((f for f in files if f.id == file_id), None)
