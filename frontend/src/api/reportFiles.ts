@@ -1,4 +1,4 @@
-import { http } from './http'
+import { http, LONG_TIMEOUT_MS } from './http'
 
 /** 上传的本期数据文件（Excel） */
 export interface ReportFile {
@@ -65,8 +65,13 @@ export const reportFileApi = {
     token: string,
     params: { prompt?: string; sheet_name?: string; label_col?: string },
   ) {
+    // 这个接口会**串行跑多次 AI 调用**（每 30 行一块逐块分类，再合成一段），
+    // 147 行约 5 块 + 1 次合成 = 6 次往返，可能远超默认的 30 秒。
+    // 必须显式用长超时，否则前端先超时、后端还在跑（用户看到「请求超时」
+    // 但服务器其实在正常工作）。
     return http.post<SummaryDraft>(`/report-files/${reportId}/files/${fileId}/summary`, null, {
       params: { token, ...params },
+      timeout: LONG_TIMEOUT_MS,
     })
   },
 }
