@@ -644,7 +644,7 @@ async function onBatchDelete(): Promise<void> {
       v-model="bindVisible"
       class="bind-dialog"
       :title="`配置绑定 - ${bindName}`"
-      width="min(980px, 92vw)"
+      width="min(1240px, 94vw)"
       top="6vh"
       :close-on-click-modal="false"
       destroy-on-close
@@ -671,7 +671,7 @@ async function onBatchDelete(): Promise<void> {
         这类占位不需要绑定指标，确认人在确认页上传 Excel 后生成总结并填入。
       </div>
       <el-table :data="filteredBindRows">
-        <el-table-column label="Word 占位符" min-width="180">
+        <el-table-column label="Word 占位符" min-width="260">
           <template #default="{ row }">
             <span class="code-chip">{{ wrapVar(row.placeholder) }}</span>
             <el-tooltip v-if="!row.alone" :content="MIXED_PLACEHOLDER_HINT" placement="top">
@@ -682,7 +682,7 @@ async function onBatchDelete(): Promise<void> {
             </el-tooltip>
           </template>
         </el-table-column>
-        <el-table-column label="类型" width="190">
+        <el-table-column label="类型" width="170">
           <template #default="{ row }">
             <!-- 总结类占位不参与绑定：说明即可，不给「指标/AI摘要」选项 -->
             <el-tooltip
@@ -700,7 +700,7 @@ async function onBatchDelete(): Promise<void> {
             </el-radio-group>
           </template>
         </el-table-column>
-        <el-table-column label="显示名" min-width="180">
+        <el-table-column label="显示名" min-width="130">
           <template #default="{ row }">
             <el-input
               v-if="row.type === 'summary'"
