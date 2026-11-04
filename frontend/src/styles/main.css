@@ -85,6 +85,8 @@ body {
   font-size: var(--font-xs);
   color: var(--code-text);
   background-color: var(--code-bg);
+  /* 不换行：变量名长且含下划线，断行后很难读 */
+  white-space: nowrap;
 }
 
 /*
