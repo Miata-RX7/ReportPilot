@@ -405,3 +405,31 @@ class TestPieSuitability:
         }
         r = await pie_suitability.analyze_pie_suitability(self._adapter([0, 1, 2], meta=meta), 101)
         assert r.confidence == "high"
+
+
+class TestCurveAggField:
+    """曲线取哪个统计量由公式的 agg 决定（2026-11-11 线上问题回归）。
+
+    之前 calc_engine 里**硬编码 row["value_avg"]**，导致 agg 配置对曲线完全无效 ——
+    实测「蒙古国航办公室-流量图」无论 agg 设 avg 还是 max，结果一模一样
+    （都是 5.53 Mbps，而数据源是 29.48 Mbps）。流量是突发量，小时均值把峰值
+    稀释了 5 倍多。
+    """
+
+    def test_curve_uses_agg_to_column(self) -> None:
+        import inspect
+
+        from app.services import calc_engine
+
+        src = inspect.getsource(calc_engine)
+        assert 'row["value_avg"]' not in src, (
+            "曲线取值又变成硬编码 value_avg 了 —— agg 配置会对曲线失效"
+        )
+        assert "AGG_TO_COLUMN" in src, "曲线取值应走 AGG_TO_COLUMN[agg]"
+
+    def test_agg_to_column_mapping(self) -> None:
+        from app.services.calc_engine import AGG_TO_COLUMN
+
+        assert AGG_TO_COLUMN["max"] == "value_max"
+        assert AGG_TO_COLUMN["avg"] == "value_avg"
+        assert AGG_TO_COLUMN["min"] == "value_min"

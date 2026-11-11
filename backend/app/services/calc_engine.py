@@ -588,9 +588,20 @@ async def _compute_curve(
         raise MetricComputeError("本期时间区间内无趋势数据")
 
     # 一次拉取后按 item_id 分组（每组内按 clock 升序）
+    #
+    # 取哪个统计量由公式的 agg 决定（avg=分桶均值 / max=分桶峰值 /
+    # min=分桶最低 / sum=分桶总量）。
+    #
+    # 之前这里**硬编码 value_avg**，导致 agg 配置对曲线完全无效 ——
+    # 实测「蒙古国航办公室-流量图」无论 agg 设 avg 还是 max，结果一模一样
+    # （都是 5.53 Mbps，而数据源是 29.48 Mbps）。
+    # 原因：流量是突发量，小时均值把峰值稀释了 5 倍多（小时内只有约 19%
+    # 的时间有流量）。曲线要用 max 才能对得上数据源的峰值。
+    _agg = (metric_def.calc_formula or {}).get("agg", "avg")
+    _field = AGG_TO_COLUMN.get(_agg, "value_avg")
     by_item: dict[int, list[tuple[int, float]]] = {}
     for row in trend:
-        by_item.setdefault(row["item_id"], []).append((row["clock"], row["value_avg"]))
+        by_item.setdefault(row["item_id"], []).append((row["clock"], row[_field]))
 
     meta_by_id = {i["item_id"]: i for i in items}
     default_tf = type_cfg.transform_default
