@@ -23,6 +23,10 @@ class MetricDefinition(TimestampMixin, Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(128))
+    # 归属人：NULL = 公共指标（所有登录用户可见只读）；新建时写当前用户
+    owner_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id"), nullable=True, index=True
+    )
     # time 类型不取数 -> 允许为空；其余类型由 API 层校验必填
     data_source_id: Mapped[int | None] = mapped_column(
         ForeignKey("data_sources.id"), nullable=True

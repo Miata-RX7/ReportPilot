@@ -22,6 +22,39 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.models.base import Base, JSONVariant, TimestampMixin
 
 
+class OwnershipTransfer(TimestampMixin, Base):
+    """离职交接审计（2026-11-11）。
+
+    记录 admin 把谁的数据转给了谁、各转了多少条。交接是**不可逆**的
+    （被转走的指标/任务/模板的归属人变了），所以必须留痕。
+    """
+
+    __tablename__ = "ownership_transfers"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    #: 操作人（admin）
+    actor_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id"), nullable=True, index=True
+    )
+    #: 离职人
+    from_user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id"), nullable=False, index=True
+    )
+    #: 接手人
+    to_user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id"), nullable=False, index=True
+    )
+    #: 各类转交条数
+    metrics_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    tasks_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    templates_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    grants_deleted_count: Mapped[int] = mapped_column(
+        Integer, default=0, nullable=False
+    )
+    #: 明细 JSON（转了哪些 id）
+    details_json: Mapped[dict[str, Any]] = mapped_column(JSONVariant, default=dict)
+
+
 class ReportTask(TimestampMixin, Base):
     __tablename__ = "report_tasks"
     __table_args__ = (

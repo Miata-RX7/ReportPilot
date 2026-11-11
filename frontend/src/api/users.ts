@@ -35,6 +35,27 @@ export const userApi = {
   update(id: number, payload: UserUpdate) {
     return http.patch<UserRead>(`/users/${id}`, payload)
   },
+  /** 预览离职人员名下各类数据的条数（不改动任何东西） */
+  ownershipSummary(id: number) {
+    return http.get<Record<string, number>>(`/users/${id}/ownership-summary`)
+  },
+  /** 离职交接：把 from_user_id 的指标/任务/模板转给 to_user_id */
+  transferOwnership(payload: {
+    from_user_id: number
+    to_user_id: number
+    include_metrics?: boolean
+    include_tasks?: boolean
+    include_templates?: boolean
+    delete_grants?: boolean
+  }) {
+    return http.post<{
+      metrics: number
+      tasks: number
+      templates: number
+      grants_deleted: number
+      transfer_id: number
+    }>('/users/transfer-ownership', payload)
+  },
   remove(id: number) {
     return http.delete<void>(`/users/${id}`)
   },
