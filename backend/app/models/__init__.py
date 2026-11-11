@@ -13,7 +13,7 @@ from app.models.report import (
     ReportSummary,
     ReportTaskFile,
 )
-from app.models.task import ReportTask
+from app.models.task import OwnershipTransfer, ReportTask
 from app.models.template import (
     TemplateBinding,
     TemplateGrant,

@@ -6,7 +6,7 @@
 - 删除前检查引用，避免破坏历史数据
 """
 
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
@@ -16,10 +16,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_user, require_admin
 from app.database import get_db
 from app.models.report import Report
-from app.models.task import ReportTask
+from app.models.task import OwnershipTransfer, ReportTask
 from app.models.template import WordTemplate
 from app.models.user import User
 from app.schemas.auth import UserRead
+from app.services import ownership_transfer
 from app.services.security import hash_password
 
 router = APIRouter()
@@ -130,6 +131,134 @@ async def update_user(
     await db.commit()
     await db.refresh(user)
     return user
+
+
+class TransferOwnershipRequest(BaseModel):
+    """离职交接请求。"""
+
+    from_user_id: int
+    to_user_id: int
+    #: 要转哪些类型（默认全转）
+    include_metrics: bool = True
+    include_tasks: bool = True
+    include_templates: bool = True
+    #: 是否删除离职人持有的模板授权（建议开 —— 否则离职后仍持权限）
+    delete_grants: bool = True
+
+
+@router.get("/{user_id}/ownership-summary")
+async def ownership_summary(
+    user_id: int,
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(require_admin),
+) -> dict[str, int]:
+    """预览：离职人员名下各类数据的条数（不改动任何东西）。"""
+    user = await db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "用户不存在")
+    return await ownership_transfer.summarize(db, user_id)
+
+
+@router.post("/transfer-ownership")
+async def transfer_ownership(
+    payload: TransferOwnershipRequest,
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(require_admin),
+) -> dict[str, Any]:
+    """把离职人员的指标/任务/模板转给接手人。
+
+    全程一个事务，任一步失败整体回滚；重复执行幂等（转完再转是 0 条）。
+    **不自动停用离职人账号** —— 账号停用走 AD 同步逻辑。
+    """
+    if payload.from_user_id == payload.to_user_id:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "接手人不能是离职人本人"
+        )
+    src = await db.get(User, payload.from_user_id)
+    dst = await db.get(User, payload.to_user_id)
+    if src is None or dst is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "用户不存在")
+    if not dst.is_active:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "接手人账号已停用"
+        )
+    # 离职人是唯一管理员 -> 交接后没人能管了
+    if src.role == "admin":
+        others = int(
+            await db.scalar(
+                select(func.count(User.id)).where(
+                    User.role == "admin",
+                    User.is_active.is_(True),
+                    User.id != src.id,
+                )
+            )
+            or 0
+        )
+        if others == 0:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "离职人是唯一的管理员，请先指定另一个管理员再交接",
+            )
+
+    opts = ownership_transfer.TransferOptions(
+        metrics=payload.include_metrics,
+        tasks=payload.include_tasks,
+        templates=payload.include_templates,
+        delete_grants=payload.delete_grants,
+    )
+    result = await ownership_transfer.transfer(
+        db,
+        from_user_id=payload.from_user_id,
+        to_user_id=payload.to_user_id,
+        options=opts,
+        actor_id=admin.id,
+    )
+    record = OwnershipTransfer(
+        actor_id=admin.id,
+        from_user_id=payload.from_user_id,
+        to_user_id=payload.to_user_id,
+        metrics_count=result.metrics,
+        tasks_count=result.tasks,
+        templates_count=result.templates,
+        grants_deleted_count=result.grants_deleted,
+        details_json={"from": src.username, "to": dst.username},
+    )
+    db.add(record)
+    await db.commit()
+    return {
+        "metrics": result.metrics,
+        "tasks": result.tasks,
+        "templates": result.templates,
+        "grants_deleted": result.grants_deleted,
+        "transfer_id": record.id,
+    }
+
+
+@router.get("/transfers/list")
+async def list_ownership_transfers(
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(require_admin),
+) -> list[dict[str, Any]]:
+    """交接审计记录（最新在前）。"""
+    rows = await db.execute(
+        select(OwnershipTransfer).order_by(OwnershipTransfer.id.desc()).limit(100)
+    )
+    out = []
+    for r in rows.scalars().all():
+        out.append(
+            {
+                "id": r.id,
+                "actor_id": r.actor_id,
+                "from_user_id": r.from_user_id,
+                "to_user_id": r.to_user_id,
+                "metrics": r.metrics_count,
+                "tasks": r.tasks_count,
+                "templates": r.templates_count,
+                "grants_deleted": r.grants_deleted_count,
+                "created_at": r.created_at.isoformat(),
+            }
+        )
+    return out
 
 
 @router.delete("/{user_id}", status_code=204)

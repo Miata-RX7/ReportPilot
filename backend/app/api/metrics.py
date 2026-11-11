@@ -12,6 +12,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, load_adapter_and_name, require_admin
+from app.services import ownership
 from app.database import get_db
 from app.models.datasource import DataSource
 from app.models.metric import MetricDefinition
@@ -48,6 +49,18 @@ _RESOLVE_CONCURRENCY = 4
 router = APIRouter()
 
 
+async def _owner_name_map(
+    db: AsyncSession, owner_ids: set[int]
+) -> dict[int, str]:
+    """id -> 用户名。用于「创建人」列（仅 admin 可见）。"""
+    if not owner_ids:
+        return {}
+    rows = await db.execute(
+        select(User.id, User.username).where(User.id.in_(owner_ids))
+    )
+    return {uid: uname for uid, uname in rows.all()}
+
+
 async def _get_or_404(db: AsyncSession, metric_id: int) -> MetricDefinition:
     metric = await db.get(MetricDefinition, metric_id)
     if metric is None:
@@ -79,14 +92,19 @@ async def _check_datasource(db: AsyncSession, datasource_id: int) -> None:
 async def create_metric(
     payload: MetricCreate,
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(require_admin),
+    current_user: User = Depends(get_current_user),
 ) -> MetricDefinition:
-    """创建指标。payload 按 metric_type 做 discriminated union 精确校验。"""
+    """创建指标。payload 按 metric_type 做 discriminated union 精确校验。
+
+    2026-11-11：创建权限从「仅 admin」放开为「所有登录用户」，指标归属创建人
+    （owner_id）。改名的人仍只有 owner 本人和 admin。
+    """
     if payload.data_source_id is not None:
         await _check_datasource(db, payload.data_source_id)
     await _check_name_conflict(db, payload.name)
     calc_formula = getattr(payload, "calc_formula", None)
     metric = MetricDefinition(
+        owner_id=current_user.id,
         name=payload.name,
         data_source_id=payload.data_source_id,
         metric_type=payload.metric_type,
@@ -347,10 +365,20 @@ def _validate_stored_config(metric: MetricDefinition) -> None:
 async def list_metrics(
     include_inactive: bool = False,
     tag: list[str] = Query(default=[]),
+    include_ids: list[int] = Query(
+        default=[],
+        description="强制包含这些指标（模板绑定页用：已绑定但当前用户无权的指标"
+        "也要能显示，否则保存绑定时会被误删）",
+    ),
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ) -> list[MetricListItem]:
     """列表：include_inactive 控制软删除；tag 可重复传，多个标签按 AND 精确匹配。
+
+    **可见性（2026-11-11）**：admin 见全部；普通用户只见**自己创建的**
+    （owner_id = 自己）；公共指标（owner_id IS NULL）所有人可见只读。
+    include_ids 里的指标**无视可见性**强制返回 —— 模板绑定页要靠它显示
+    「别人创建的、已绑定在本模板上的指标」，否则用户看不到就会在保存时误删绑定。
 
     附带 query_config_resolved（名称解析），供列表直接展示主机/监控项名称。
     """
@@ -362,13 +390,30 @@ async def list_metrics(
         if cleaned:
             stmt = _tag_filter(stmt, db, cleaned, i)
     metrics = list((await db.scalars(stmt)).all())
-    resolved = await _resolve_many(db, metrics)
+    if include_ids:
+        extra = list(
+            (
+                await db.scalars(
+                    select(MetricDefinition).where(
+                        MetricDefinition.id.in_(include_ids)
+                    )
+                )
+            ).all()
+        )
+        known = {m.id for m in metrics}
+        metrics.extend(m for m in extra if m.id not in known)
+    visible = [m for m in metrics if ownership.metric_visible_to(m, current_user)]
+    resolved = await _resolve_many(db, visible)
+    owner_names = await _owner_name_map(db, {m.owner_id for m in visible if m.owner_id})
     return [
         MetricListItem(
             **_to_read(m).model_dump(),
             query_config_resolved=resolved.get(m.id),
+            owner_id=m.owner_id,
+            # 只有 admin 能看到创建人 —— 在后端就掐掉，不靠前端隐藏
+            owner_name=owner_names.get(m.owner_id) if ownership.is_admin(current_user) else None,
         )
-        for m in metrics
+        for m in visible
     ]
 
 
@@ -376,16 +421,25 @@ async def list_metrics(
 async def get_metric(
     metric_id: int,
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ) -> MetricDetail:
     """指标详情：附带 query_config 的 id -> name 解析结果（编辑页回填用）。
 
     数据源不可达时 query_config_resolved 为 null（前端降级显示 id）。
     """
     metric = await _get_or_404(db, metric_id)
+    ownership.ensure_metric_visible(metric, current_user)
     resolved = (await _resolve_many(db, [metric])).get(metric.id)
+    owner_names = await _owner_name_map(
+        db, {metric.owner_id} if metric.owner_id else set()
+    )
     return MetricDetail(
-        **_to_read(metric).model_dump(), query_config_resolved=resolved
+        **_to_read(metric).model_dump(),
+        query_config_resolved=resolved,
+        owner_id=metric.owner_id,
+        owner_name=owner_names.get(metric.owner_id)
+        if ownership.is_admin(current_user)
+        else None,
     )
 
 
@@ -394,9 +448,10 @@ async def update_metric(
     metric_id: int,
     payload: MetricUpdate,
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(require_admin),
+    current_user: User = Depends(get_current_user),
 ) -> MetricDefinition:
     metric = await _get_or_404(db, metric_id)
+    ownership.ensure_metric_editable(metric, current_user)
     if payload.name is not None and payload.name != metric.name:
         await _check_name_conflict(db, payload.name, exclude_id=metric.id)
         metric.name = payload.name
@@ -431,9 +486,10 @@ async def update_metric(
 async def delete_metric(
     metric_id: int,
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(require_admin),
+    current_user: User = Depends(get_current_user),
 ) -> Response:
     metric = await _get_or_404(db, metric_id)
+    ownership.ensure_metric_editable(metric, current_user)
     metric.is_active = False  # 软删除
     await db.commit()
     logger.info("指标已软删除 id=%d", metric.id)

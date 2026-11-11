@@ -398,6 +398,8 @@ onMounted(load)
           </div>
         </template>
       </el-table-column>
+      <!-- 创建人只有 admin 能看到 -->
+      <el-table-column v-if="auth.isAdmin" prop="created_by_name" label="创建人" width="120" />
       <el-table-column label="模板" min-width="140">
         <template #default="{ row }">{{ row.template_name ?? `#${row.template_id}` }}</template>
       </el-table-column>

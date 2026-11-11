@@ -643,10 +643,18 @@ class MetricListItem(MetricDefinitionRead):
     """列表项：附带 id -> name 解析结果（数据源不可达时为 null）。"""
 
     query_config_resolved: QueryConfigResolved | None = None
+    #: 归属人 id
+    owner_id: int | None = None
+    #: 归属人名字 —— **只有 admin 才会被填充**，普通用户恒为 None
+    owner_name: str | None = None
 
 
 class MetricDetail(MetricDefinitionRead):
     query_config_resolved: QueryConfigResolved | None = None
+    #: 归属人 id
+    owner_id: int | None = None
+    #: 归属人名字 —— **只有 admin 才会被填充**
+    owner_name: str | None = None
 
 
 class PieSuitability(BaseModel):

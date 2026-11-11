@@ -1613,6 +1613,9 @@ onMounted(load)
         >
       <template #columns>
         <el-table-column prop="name" label="名称" min-width="150" />
+    <!-- 创建人只有 admin 能看到（后端也只在 admin 时返回，普通用户拿不到） -->
+    <el-table-column v-if="auth.isAdmin" prop="owner_name" label="创建人" width="120" />
+
         <el-table-column label="类型" width="100">
           <template #default="{ row }">
             <span

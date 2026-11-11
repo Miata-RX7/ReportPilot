@@ -13,6 +13,7 @@ import TemplateGrantsDialog from '@/components/TemplateGrantsDialog.vue'
 import TemplatePreviewDialog from '@/components/TemplatePreviewDialog.vue'
 import TemplateVersionsDialog from '@/components/TemplateVersionsDialog.vue'
 import { metricApi } from '@/api/metrics'
+import { useAuthStore } from '@/stores/auth'
 import { templateApi } from '@/api/templates'
 import type {
   BindingItem,
@@ -70,6 +71,7 @@ const uploadViolations = ref<string[]>([])
 const uploadError = ref<string | null>(null)
 
 /* ---- 配置绑定 ---- */
+const auth = useAuthStore()
 const bindVisible = ref(false)
 const bindSubmitting = ref(false)
 const bindId = ref<number | null>(null)
@@ -270,6 +272,18 @@ async function openBinding(row: TemplateListItem) {
     const byPh = new Map(data.bindings.map((b) => [b.placeholder, b]))
     // 载入已有的显示名（模板级，跟着模板走而不是版本）
     summaryLabels.value = { ...(data.summary_labels ?? {}) }
+    // **把已绑定的指标 id 一起拉进来**：其中可能有别人创建的（当前用户
+    // 无权编辑），不带进来用户在候选列表里看不到 -> 保存时误删绑定。
+    const boundIds = data.bindings
+      .filter((b) => b.binding_type === 'metric' && b.binding_ref_id != null)
+      .map((b) => b.binding_ref_id as number)
+    if (boundIds.length) {
+      const extra = await metricApi.list(undefined, boundIds)
+      const known = new Set(metrics.value.map((x) => x.id))
+      for (const m of extra.data) {
+        if (!known.has(m.id)) metrics.value.push(m)
+      }
+    }
     bindRows.value = data.placeholders.map((p) => {
       const alone = p.is_alone_in_paragraph
       const b = byPh.get(p.name)
@@ -479,6 +493,8 @@ async function onBatchDelete(): Promise<void> {
     >
       <template #columns>
         <el-table-column prop="name" label="模板名" min-width="160" />
+        <!-- 创建人只有 admin 能看到 -->
+        <el-table-column v-if="auth.isAdmin" prop="owner_name" label="创建人" width="120" />
         <el-table-column label="属主" width="120">
           <template #default="{ row }">{{ row.owner_name || '—' }}</template>
         </el-table-column>

@@ -152,6 +152,54 @@ async function saveAi() {
   }
 }
 
+/* ---- 离职交接 ---- */
+const transferVisible = ref(false)
+const transferFrom = ref<UserRead | null>(null)
+const transferTo = ref<number | null>(null)
+const transferSummary = ref<Record<string, number> | null>(null)
+const transferSubmitting = ref(false)
+
+async function openTransfer(row: UserRead) {
+  transferFrom.value = row
+  transferTo.value = null
+  transferSummary.value = null
+  transferVisible.value = true
+  try {
+    transferSummary.value = (await userApi.ownershipSummary(row.id)).data
+  } catch (error) {
+    ElMessage.error(parseApiError(error).message)
+  }
+}
+
+async function onTransfer() {
+  const from = transferFrom.value
+  if (!from || transferTo.value === null) {
+    ElMessage.warning('请选择接手人')
+    return
+  }
+  if (transferTo.value === from.id) {
+    ElMessage.warning('接手人不能是离职人本人')
+    return
+  }
+  transferSubmitting.value = true
+  try {
+    const { data } = await userApi.transferOwnership({
+      from_user_id: from.id,
+      to_user_id: transferTo.value,
+    })
+    ElMessage.success(
+      `交接完成：指标 ${data.metrics} 个、任务 ${data.tasks} 个、模板 ${data.templates} 个` +
+        (data.grants_deleted ? `，删除授权 ${data.grants_deleted} 条` : ''),
+    )
+    transferVisible.value = false
+    await loadUsers()
+  } catch (error) {
+    ElMessage.error(parseApiError(error).message)
+  } finally {
+    transferSubmitting.value = false
+  }
+}
+
 /* ---- 用户管理 ---- */
 const users = ref<UserRead[]>([])
 const usersLoading = ref(false)
@@ -604,6 +652,14 @@ onMounted(() => {
                 </el-button>
                 <el-button
                   link
+                  type="warning"
+                  :data-testid="`user-transfer-${row.id}`"
+                  @click="openTransfer(row)"
+                >
+                  交接
+                </el-button>
+                <el-button
+                  link
                   type="danger"
                   :data-testid="`user-delete-${row.id}`"
                   @click="onDeleteUser(row)"
@@ -660,6 +716,51 @@ onMounted(() => {
         </el-form-item>
       </el-form>
     </FormDialog>
+
+    <!-- 离职交接 -->
+    <el-dialog
+      v-model="transferVisible"
+      title="离职人员数据交接"
+      width="min(560px, 94vw)"
+      data-testid="transfer-dialog"
+    >
+      <el-alert
+        type="warning"
+        :closable="false"
+        show-icon
+        title="交接后，指标 / 报告任务 / 模板的归属人会变成接手人"
+        description="交接不可逆（会写审计记录）。离职人的账号不会自动停用 —— 账号停用走 AD 同步。"
+      />
+      <el-form label-width="90px" class="transfer-form">
+        <el-form-item label="离职人员">
+          <span>{{ transferFrom?.display_name || transferFrom?.username }}</span>
+        </el-form-item>
+        <el-form-item label="接手人员">
+          <el-select v-model="transferTo" filterable placeholder="选择接手人" style="width: 100%">
+            <el-option
+              v-for="u in users.filter((x) => x.id !== transferFrom?.id && x.is_active)"
+              :key="u.id"
+              :label="u.display_name || u.username"
+              :value="u.id"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item v-if="transferSummary" label="将转交">
+          <div class="transfer-summary">
+            <div>指标：{{ transferSummary.metrics ?? 0 }} 个</div>
+            <div>报告任务：{{ transferSummary.tasks ?? 0 }} 个</div>
+            <div>模板：{{ transferSummary.templates ?? 0 }} 个</div>
+            <div>将删除其持有的模板授权：{{ transferSummary.grants ?? 0 }} 条</div>
+          </div>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="transferVisible = false">取消</el-button>
+        <el-button type="primary" :loading="transferSubmitting" @click="onTransfer">
+          确认交接
+        </el-button>
+      </template>
+    </el-dialog>
 
     <!-- 编辑用户 -->
     <FormDialog
@@ -791,6 +892,14 @@ onMounted(() => {
 </template>
 
 <style scoped lang="scss">
+.transfer-form {
+  margin-top: var(--space-3, 12px);
+}
+.transfer-summary {
+  font-size: 13px;
+  line-height: 1.9;
+  color: var(--color-text-secondary, #64748b);
+}
 .settings-tabs :deep(.el-tabs__header) {
   margin-bottom: var(--space-4);
 }

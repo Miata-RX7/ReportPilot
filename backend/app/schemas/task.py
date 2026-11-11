@@ -69,6 +69,10 @@ class ReportTaskRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    #: 创建人 id
+    created_by: int | None = None
+    #: 创建人名字 —— **只有 admin 才会被填充**
+    created_by_name: str | None = None
     name: str
     template_id: int
     template_name: str | None = None

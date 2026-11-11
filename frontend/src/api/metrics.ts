@@ -10,9 +10,14 @@ import type {
 
 export const metricApi = {
   /** 列表：tags 传入按 AND 精确匹配（后端 jsonb 包含查询） */
-  list(tags?: string[]) {
+  list(tags?: string[], includeIds?: number[]) {
+    const params: Record<string, unknown> = {}
+    if (tags?.length) params.tag = tags
+    // 模板绑定页用：把「已绑定但当前用户无权编辑」的指标也拉进来，
+    // 否则用户在候选列表里看不到它 -> 保存绑定时会被误删（后端也有兜底）
+    if (includeIds?.length) params.include_ids = includeIds
     return http.get<MetricListItem[]>('/metrics', {
-      params: tags?.length ? { tag: tags } : undefined,
+      params: Object.keys(params).length ? params : undefined,
       // 数组序列化为 tag=a&tag=b（默认会变成 tag[]=a，FastAPI 收不到）
       paramsSerializer: { indexes: null },
     })

@@ -53,7 +53,13 @@ from app.schemas.template import (
     TransferRequest,
     VersionRead,
 )
-from app.services import ai_insight, ai_trace, onlyoffice_service, template_service
+from app.services import (
+    ai_insight,
+    ai_trace,
+    onlyoffice_service,
+    ownership,
+    template_service,
+)
 from app.services.ai_insight import InsightConfig
 from app.services.adapters.base import (
     AdapterAPIError,
@@ -141,7 +147,10 @@ def _version_read(tpl: WordTemplate, version: TemplateVersion) -> VersionRead:
 
 
 async def _to_detail(
-    db: AsyncSession, tpl: WordTemplate, permission: str
+    db: AsyncSession,
+    tpl: WordTemplate,
+    permission: str,
+    current_user: User | None = None,
 ) -> TemplateDetail:
     version = await template_service.get_current_version(db, tpl)
     bindings = (
@@ -158,7 +167,12 @@ async def _to_detail(
         is_active=tpl.is_active,
         created_at=tpl.created_at,
         owner_id=tpl.owner_id,
-        owner_name=(owner.display_name or owner.username) if owner else None,
+        # 「创建人」只有 admin 能看到 —— 在后端就掐掉，不靠前端隐藏
+        owner_name=(
+            (owner.display_name or owner.username)
+            if owner and current_user is not None and current_user.role == "admin"
+            else None
+        ),
         permission=permission,
         current_version=_version_read(tpl, version) if version else None,
         placeholders=[
@@ -245,7 +259,7 @@ async def upload_template(
         len(placeholders),
         tpl.owner_id or 0,
     )
-    return await _to_detail(db, tpl, "manage")
+    return await _to_detail(db, tpl, "manage", current_user)
 
 
 @router.get("", response_model=list[TemplateListItem])
@@ -272,7 +286,12 @@ async def list_templates(
                 is_active=tpl.is_active,
                 created_at=tpl.created_at,
                 owner_id=tpl.owner_id,
-                owner_name=(owner.display_name or owner.username) if owner else None,
+                # 「创建人」只有 admin 能看到 —— 在后端就掐掉，不靠前端隐藏
+        owner_name=(
+            (owner.display_name or owner.username)
+            if owner and current_user.role == "admin"
+            else None
+        ),
                 current_version_no=version.version_no if version else None,
                 permission=permission,
             )
@@ -290,7 +309,7 @@ async def get_template(
     permission = await template_service.require_permission(
         db, tpl, current_user, "view"
     )
-    return await _to_detail(db, tpl, permission)
+    return await _to_detail(db, tpl, permission, current_user)
 
 
 @router.get("/{tpl_id}/versions", response_model=list[VersionRead])
@@ -371,6 +390,39 @@ async def put_bindings(
     # 图表类型指标必须独占段落 -> 解析当前版本文件拿独占信息
     alone = placeholder_alone_map(version, list(placeholder_set))
 
+    # ---- 「不可编辑的绑定必须原样保留」（2026-11-11 指标归属改造的配套）----
+    #
+    # 指标收紧为「只有创建者能改」之后，模板上可能绑定了**别人创建的指标**。
+    # 当前用户在绑定页看不到那些指标 -> 前端的候选列表里没有 -> 保存时若按
+    # 「全量替换」语义提交，就会把这些绑定**静默删掉**。
+    # 所以后端要主动兜底：
+    #   1) 前端若试图修改这类绑定 -> 明确报错
+    #   2) 前端若漏传 -> 后端自动补回原绑定
+    existing_bindings = await template_service.bindings_for_version(db, version.id)
+    locked_bindings: dict[str, TemplateBinding] = {}
+    for b in existing_bindings:
+        if b.binding_type != "metric" or b.binding_ref_id is None:
+            continue
+        m = await db.get(MetricDefinition, b.binding_ref_id)
+        if m is None:
+            continue
+        if not ownership.metric_editable_by(m, current_user):
+            locked_bindings[b.placeholder] = b
+    if locked_bindings:
+        submitted = {item.placeholder: item for item in payload.bindings}
+        for ph, b in locked_bindings.items():
+            item = submitted.get(ph)
+            if item is None:
+                continue  # 漏传 -> 后面自动补回
+            if (
+                item.binding_type != "metric"
+                or item.binding_ref_id != b.binding_ref_id
+            ):
+                raise HTTPException(
+                    status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    f"变量 {ph} 绑定的指标由他人创建，当前用户无权修改",
+                )
+
     seen: set[str] = set()
     new_bindings: list[TemplateBinding] = []
     for item in payload.bindings:
@@ -421,6 +473,18 @@ async def put_bindings(
                 binding_key=item.binding_key,
                 ai_config_json=item.ai_config_for_db(),
             )
+        )
+
+    # 自动补回「不可编辑」的绑定（前端可能因为看不到该指标而漏传）
+    for ph, b in locked_bindings.items():
+        if ph in seen:
+            continue
+        seen.add(ph)
+        new_bindings.append(b)
+        logger.info(
+            "保留他人创建的绑定（当前用户无权修改） template_id=%d placeholder=%s",
+            tpl_id,
+            ph,
         )
 
     cleared = await template_service.replace_version_bindings(
@@ -685,7 +749,7 @@ async def transfer_owner(
     await db.commit()
     await db.refresh(tpl)
     logger.info("模板属主转移 template_id=%d -> user=%d", tpl.id, new_owner.id)
-    return await _to_detail(db, tpl, "manage")
+    return await _to_detail(db, tpl, "manage", current_user)
 
 
 @router.delete("/{tpl_id}", status_code=status.HTTP_204_NO_CONTENT)
