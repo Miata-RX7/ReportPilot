@@ -24,6 +24,17 @@ def upgrade() -> None:
         sa.Column("actor_id", sa.Integer(), nullable=True),
         sa.Column("from_user_id", sa.Integer(), nullable=False),
         sa.Column("to_user_id", sa.Integer(), nullable=False),
+        # FK 直接写在建表里 —— 不用 op.create_foreign_key（那个要 6 个位置参数，
+        # 写漏了会报 missing 'remote_cols'）
+        sa.ForeignKeyConstraint(
+            ["actor_id"], ["users.id"], name="fk_ownership_transfers_actor", ondelete="SET NULL"
+        ),
+        sa.ForeignKeyConstraint(
+            ["from_user_id"], ["users.id"], name="fk_ownership_transfers_from"
+        ),
+        sa.ForeignKeyConstraint(
+            ["to_user_id"], ["users.id"], name="fk_ownership_transfers_to"
+        ),
         sa.Column("metrics_count", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("tasks_count", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("templates_count", sa.Integer(), nullable=False, server_default="0"),
@@ -33,15 +44,6 @@ def upgrade() -> None:
     op.create_index("ix_ownership_transfers_actor_id", "ownership_transfers", ["actor_id"])
     op.create_index("ix_ownership_transfers_from_user_id", "ownership_transfers", ["from_user_id"])
     op.create_index("ix_ownership_transfers_to_user_id", "ownership_transfers", ["to_user_id"])
-    op.create_foreign_key(
-        "ownership_transfers", "users", ["actor_id"], ["id"], ondelete="SET NULL"
-    )
-    op.create_foreign_key(
-        "ownership_transfers", "users", ["from_user_id"], ["id"]
-    )
-    op.create_foreign_key(
-        "ownership_transfers", "users", ["to_user_id"], ["id"]
-    )
 
 
 def downgrade() -> None:
