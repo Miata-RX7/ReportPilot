@@ -1305,6 +1305,14 @@ function buildPayload(): MetricDefinitionCreate {
     tags: [...form.tags],
     // pie/text/time 没有单位能力，一律不带换算，避免后端 422
     unit_config: unitRowVisible.value ? buildUnitConfig() : disabledUnitConfig(),
+    // **必须放在 common 里**：之前只写在 scalar 分支，导致 curve 分支
+    // `...common` 拿不到 calc_formula —— 前端不传，后端就存 {}，
+    // 「聚合方式」选了也白选（2026-11-11 线上反馈）。
+    calc_formula: {
+      agg: form.agg,
+      compare: form.compare,
+      baseline_lookback: form.compare === 'none' ? null : form.baseline_lookback,
+    },
   }
   if (form.metric_type === 'curve') {
     return {
@@ -1385,11 +1393,6 @@ function buildPayload(): MetricDefinitionCreate {
     query_config: { ...scope, item_ids: effectiveItemIds.value },
     type_config: {
       transform: { mul: Number(form.transform_mul), add: Number(form.transform_add) },
-    },
-    calc_formula: {
-      agg: form.agg,
-      compare: form.compare,
-      baseline_lookback: form.compare === 'none' ? null : form.baseline_lookback,
     },
   }
 }
