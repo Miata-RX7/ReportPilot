@@ -526,7 +526,8 @@ async function openEdit(row: MetricDefinitionRead) {
     unit: row.unit,
     display_precision: row.display_precision,
     tags: [...(row.tags ?? [])],
-    agg: row.calc_formula.agg,
+    // 老数据可能没有 agg（曲线类型以前前端根本不暴露这个配置）-> 兜底 avg
+    agg: row.calc_formula?.agg ?? 'avg',
     compare: row.calc_formula.compare,
     baseline_lookback: row.calc_formula.baseline_lookback ?? null,
     transform_mul: row.type_config?.transform?.mul ?? 1,
@@ -2294,19 +2295,35 @@ onMounted(load)
           </el-form-item>
         </template>
 
-        <template v-if="form.metric_type === 'scalar'">
+        <template v-if="form.metric_type === 'scalar' || form.metric_type === 'curve'">
         <div class="form-section">计算配置</div>
-        <!-- 聚合与对比都是「选一个口径」，上下两行纯浪费纵向空间，放同一行 -->
+        <!--
+          聚合与对比都是「选一个口径」，上下两行纯浪费纵向空间，放同一行。
+          曲线类型没有「对比方式」（曲线是逐点画出来的，没有单一值可对比）。
+        -->
         <div class="transform-row">
           <el-form-item label="聚合方式" prop="agg">
             <el-select v-model="form.agg" class="full-width">
-              <el-option label="平均（avg）" value="avg" />
-              <el-option label="求和（sum）" value="sum" />
-              <el-option label="最大（max）" value="max" />
-              <el-option label="最小（min）" value="min" />
+              <template v-if="form.metric_type === 'curve'">
+                <el-option label="时段平均（avg）" value="avg" />
+                <el-option label="时段峰值（max）" value="max" />
+                <el-option label="时段最低（min）" value="min" />
+                <el-option label="时段合计（sum）" value="sum" />
+              </template>
+              <template v-else>
+                <el-option label="平均（avg）" value="avg" />
+                <el-option label="求和（sum）" value="sum" />
+                <el-option label="最大（max）" value="max" />
+                <el-option label="最小（min）" value="min" />
+              </template>
             </el-select>
+            <span v-if="form.metric_type === 'curve'" class="text-muted form-hint">
+              决定曲线上**每个时间点**取该时段内的哪个统计量（数据源是更细粒度的采样，
+              平台按时段分桶）。流量、带宽这类突发量建议用「时段峰值」——
+              用「时段平均」会把峰值稀释好几倍，与数据源对不上。
+            </span>
           </el-form-item>
-          <el-form-item label="对比方式" prop="compare">
+          <el-form-item v-if="form.metric_type === 'scalar'" label="对比方式" prop="compare">
             <el-select v-model="form.compare" class="full-width">
               <el-option label="无对比（none）" value="none" />
               <el-option label="环比（mom）" value="mom" />
@@ -2314,7 +2331,11 @@ onMounted(load)
             </el-select>
           </el-form-item>
         </div>
-        <el-form-item v-if="form.compare !== 'none'" label="回溯周期" prop="baseline_lookback">
+        <el-form-item
+          v-if="form.metric_type === 'scalar' && form.compare !== 'none'"
+          label="回溯周期"
+          prop="baseline_lookback"
+        >
           <el-input-number v-model="form.baseline_lookback" :min="1" />
           <span class="text-muted form-hint">mom 通常为 1，yoy 通常为 12</span>
         </el-form-item>
