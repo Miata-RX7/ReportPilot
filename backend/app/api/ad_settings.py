@@ -30,7 +30,7 @@ class AdSettingsRead(BaseModel):
     bind_dn: str = ""
     #: 服务账号密码是否已配置（接口永不返回密码本身）
     bind_password_set: bool = False
-    base_dn: str = ""
+    base_dn: str = "ou=livecom,dc=livecom,dc=hk"
     user_filter: str = "(&(objectClass=user)(sAMAccountType=805306368))"
     map_username: str = "sAMAccountName"
     map_display_name: str = "displayName"
@@ -48,7 +48,7 @@ class AdSettingsUpdate(BaseModel):
     server: str = ""
     bind_dn: str = ""
     bind_password: str | None = None
-    base_dn: str = ""
+    base_dn: str = "ou=livecom,dc=livecom,dc=hk"
     user_filter: str = "(&(objectClass=user)(sAMAccountType=805306368))"
     map_username: str = "sAMAccountName"
     map_display_name: str = "displayName"
@@ -73,6 +73,8 @@ class AdSyncResult(BaseModel):
     reactivated: int = 0
     vanished: int = 0
     skipped_no_email: int = 0
+    #: AD 里已禁用、首次建档时跳过的账号数
+    skipped_disabled: int = 0
     errors: list[str] = []
 
 

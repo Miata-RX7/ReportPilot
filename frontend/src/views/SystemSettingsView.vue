@@ -722,7 +722,7 @@ onMounted(() => {
             />
           </el-form-item>
           <el-form-item label="根 DN">
-            <el-input v-model="adForm.base_dn" placeholder="dc=livecom,dc=hk" />
+            <el-input v-model="adForm.base_dn" placeholder="ou=livecom,dc=livecom,dc=hk" />
           </el-form-item>
           <el-form-item label="用户过滤器">
             <el-input v-model="adForm.user_filter" placeholder="(&(objectClass=user)(sAMAccountType=805306368))" />

@@ -103,8 +103,9 @@ class Settings(BaseSettings):
     ad_bind_dn: str = "read_conn@livecom.hk"
     #: 服务账号密码（**密文存 app_settings**，接口永不返回）
     ad_bind_password: str = ""
-    #: 搜索用户的根 DN
-    ad_base_dn: str = "dc=livecom,dc=hk"
+    #: 搜索用户的根 DN —— **只同步 livecom 这个 OU 下的账号**，
+    #: 不含域根下的其它 OU（Guest/krbtgt 等内置账号、以及其它组织的账号）。
+    ad_base_dn: str = "ou=livecom,dc=livecom,dc=hk"
     #: 拉取用户列表的 LDAP 过滤器。
     #: sAMAccountType=805306368 = NORMAL_ACCOUNT（真人），
     #: 排除机器账号（805306369，如 HK-DC01$）—— 它们也是 objectClass=user。
