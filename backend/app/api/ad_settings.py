@@ -126,7 +126,9 @@ async def update_ad_settings(
     if payload.bind_password is not None and payload.bind_password.strip():
         values["ad_bind_password"] = payload.bind_password
     await runtime_config.save(db, values)
-    runtime_config.refresh(db)
+    # **必须 await**：refresh 是 async，负责把 DB 里的覆盖项重新载入进程内缓存。
+    # effective_settings() 只读缓存 —— 不刷新的话，保存后「测试连接」用的还是旧配置。
+    await runtime_config.refresh(db)
     return _read()
 
 
