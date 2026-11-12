@@ -32,18 +32,16 @@ class OwnershipTransfer(TimestampMixin, Base):
     __tablename__ = "ownership_transfers"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    # 说明：这三个 id **故意不建外键**（迁移 0027）。
+    # 审计记录的价值在于「人已经走了，但交接过程有据可查」—— 如果建外键，
+    # 删除离职人员时会被 ForeignKeyViolationError 挡住（而离职交接的典型
+    # 流程恰恰是「交接完就删人」）。这里只作为普通整数留存。
     #: 操作人（admin）
-    actor_id: Mapped[int | None] = mapped_column(
-        ForeignKey("users.id"), nullable=True, index=True
-    )
+    actor_id: Mapped[int | None] = mapped_column(nullable=True, index=True)
     #: 离职人
-    from_user_id: Mapped[int] = mapped_column(
-        ForeignKey("users.id"), nullable=False, index=True
-    )
+    from_user_id: Mapped[int] = mapped_column(nullable=False, index=True)
     #: 接手人
-    to_user_id: Mapped[int] = mapped_column(
-        ForeignKey("users.id"), nullable=False, index=True
-    )
+    to_user_id: Mapped[int] = mapped_column(nullable=False, index=True)
     #: 各类转交条数
     metrics_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     tasks_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
