@@ -564,6 +564,7 @@ onMounted(load)
 
       <div class="confirm-actions__buttons">
       <el-button
+      plain
             type="primary"
             size="large"
             :loading="confirming"
@@ -573,6 +574,8 @@ onMounted(load)
             确认并发送给收件人
           </el-button>
           <el-button
+          plain
+          size="large"
             data-testid="confirm-only"
             :loading="confirmingOnly"
             @click="onConfirmOnly"
@@ -639,6 +642,10 @@ onMounted(load)
   flex-wrap: wrap;
 }
 .confirm-page {
+  /* **必须** border-box：全局只给 .page-container 设了 border-box，
+     这里默认 content-box -> min-height:100vh + padding 96px -> 页面比视口高，
+     凭空多出一条滚动条（内容明明不满一屏） */
+  box-sizing: border-box;
   min-height: 100vh;
   display: flex;
   align-items: flex-start;
