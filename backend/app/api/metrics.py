@@ -12,7 +12,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, load_adapter_and_name, require_admin
-from app.services import ownership
+from app.services import calculated_metrics, ownership
 from app.database import get_db
 from app.models.datasource import DataSource
 from app.models.metric import MetricDefinition
@@ -101,6 +101,17 @@ async def create_metric(
     """
     if payload.data_source_id is not None:
         await _check_datasource(db, payload.data_source_id)
+    if payload.metric_type == "calculated":
+        try:
+            await calculated_metrics.validate_calculated_config(
+                db,
+                query_config=payload.query_config.model_dump(),
+                data_source_id=payload.data_source_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)
+            ) from None
     await _check_name_conflict(db, payload.name)
     calc_formula = getattr(payload, "calc_formula", None)
     metric = MetricDefinition(
@@ -452,6 +463,28 @@ async def update_metric(
 ) -> MetricDefinition:
     metric = await _get_or_404(db, metric_id)
     ownership.ensure_metric_editable(metric, current_user)
+    new_type = payload.metric_type or metric.metric_type
+    new_ds = (
+        payload.data_source_id
+        if payload.data_source_id is not None
+        else metric.data_source_id
+    )
+    new_query = (
+        payload.query_config
+        if payload.query_config is not None
+        else (metric.query_config or {})
+    )
+    if new_type == "calculated":
+        try:
+            await calculated_metrics.validate_calculated_config(
+                db,
+                query_config=new_query,
+                data_source_id=new_ds,
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)
+            ) from None
     if payload.name is not None and payload.name != metric.name:
         await _check_name_conflict(db, payload.name, exclude_id=metric.id)
         metric.name = payload.name

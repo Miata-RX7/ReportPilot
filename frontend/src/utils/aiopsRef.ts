@@ -24,7 +24,7 @@ export const AIOPS_PREFIX_LIST = 'l'
 
 export type AiopsDataType = 'number' | 'text' | 'list'
 export type AiopsValueType = 'number' | 'text'
-export type MetricType = 'scalar' | 'curve' | 'pie' | 'text' | 'time'
+export type MetricType = 'scalar' | 'curve' | 'pie' | 'text' | 'time' | 'calculated'
 
 export interface AiopsRef {
   instanceId: number
@@ -159,6 +159,7 @@ export function supportsCurve(
 
 /** 指标类型的中文说明（禁用项 tooltip 与已选项回显用）。 */
 export const METRIC_TYPE_LABEL: Record<MetricType, string> = {
+  calculated: '计算型',
   scalar: '数值',
   curve: '曲线图',
   pie: '饼图',

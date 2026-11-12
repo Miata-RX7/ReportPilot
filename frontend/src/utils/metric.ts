@@ -14,6 +14,7 @@ export const METRIC_TYPE_LABEL: Record<MetricType, string> = {
   pie: '饼图',
   text: '文本',
   time: '时间',
+  calculated: '计算型',
 }
 
 /** 指标类型软标签色：scalar 蓝 / curve 青 / pie 橙 / text 灰 / time 紫(accent) */
@@ -27,6 +28,8 @@ export function metricTypeClass(
       return 'success'
     case 'pie':
       return 'warning'
+    case 'calculated':
+      return 'accent'
     case 'text':
       return 'neutral'
     case 'time':

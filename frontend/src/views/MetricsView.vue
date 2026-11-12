@@ -72,9 +72,39 @@ import { previousPeriod } from '@/utils/format'
 const auth = useAuthStore()
 
 /** 指标类型（顺序即弹窗 radio 顺序） */
-const METRIC_TYPES: MetricType[] = ['scalar', 'curve', 'pie', 'text', 'time']
+const METRIC_TYPES: MetricType[] = [
+  'scalar',
+  'curve',
+  'pie',
+  'text',
+  'time',
+  'calculated',
+]
 
 const rows = ref<MetricListItem[]>([])
+
+/**
+ * 计算型指标可引用的指标：**只有数值类型（scalar）**。
+ *
+ * 曲线/饼图/文本的值不是单个数，算不了；计算型指标暂不支持嵌套。
+ */
+const scalarMetricOptions = computed(() =>
+  rows.value.filter((m) => m.metric_type === 'scalar' && m.is_active),
+)
+
+/** 加一个变量：默认名 a/b/c…，可改 */
+function addCalcVariable() {
+  const used = new Set(form.calc_variables.map((v) => v.name))
+  const letters = 'abcdefghijklmnopqrstuvwxyz'
+  let name = 'a'
+  for (const ch of letters) {
+    if (!used.has(ch)) {
+      name = ch
+      break
+    }
+  }
+  form.calc_variables.push({ name, metric_id: null })
+}
 const dataSources = ref<DataSourceRead[]>([])
 const loading = ref(false)
 const dsMap = computed(() => new Map(dataSources.value.map((d) => [d.id, d.name])))
@@ -141,6 +171,16 @@ const form = reactive({
   instance_ids: [] as string[],
   item_ids: [] as string[],
   agg: 'avg' as AggType,
+  // ---- 计算型指标（2026-11-12）----
+  /** 算式，如 "(100 - a) / 100 * minutes" */
+  calc_formula_text: '',
+  /** 变量定义 */
+  calc_variables: [] as { name: string; metric_id: number | null }[],
+  /** 是否提供内置变量 minutes（= 所选周期的总分钟数） */
+  calc_builtin_minutes: true,
+  /** 结果的数值变换（单位人工换算）：value = raw * mul + add */
+  calc_transform_mul: 1,
+  calc_transform_add: 0,
   compare: 'none' as CompareType,
   baseline_lookback: null as number | null,
   // scalar 数值变换：value = raw * mul + add
@@ -381,6 +421,8 @@ const rules = computed<FormRules>(() => ({
       required: false,
       validator: (_r, _v, cb) => {
         if (form.metric_type === 'time') return cb() // 时间类型不取数
+    // 计算型指标不直接取数（取数的是它引用的那些指标）
+    if (form.metric_type === 'calculated') return cb()
         if (form.metric_type === 'curve') return cb() // curve 用 series
         if (form.metric_type === 'pie') {
           // pie 用标量 pie_item_id，item_ids 规则不适用
@@ -581,6 +623,23 @@ async function openEdit(row: MetricDefinitionRead) {
   aiopsScalarRefs.value = [...(row.query_config.item_ids ?? [])]
   // 文本型单选用同一个数组的第一项
   aiopsTextRef.value = form.metric_type === 'text' ? (row.query_config.item_ids?.[0] ?? '') : ''
+  // 计算型指标：算式与变量回显（2026-11-12）
+  if (form.metric_type === 'calculated') {
+    const qc = row.query_config as unknown as {
+      formula?: string
+      variables?: { name: string; metric_id: number }[]
+      builtin_minutes?: boolean
+    }
+    form.calc_formula_text = qc.formula ?? ''
+    form.calc_variables = (qc.variables ?? []).map((v) => ({
+      name: v.name,
+      metric_id: v.metric_id,
+    }))
+    form.calc_builtin_minutes = qc.builtin_minutes ?? true
+    const tf = (row.type_config as unknown as { transform?: { mul?: number; add?: number } })?.transform
+    form.calc_transform_mul = tf?.mul ?? 1
+    form.calc_transform_add = tf?.add ?? 0
+  }
   // 曲线的取数对象与展示名/数值变换都存在 series 里，一并回填
   form.series = (row.query_config.series ?? []).map((s) => {
     const one = s as { item_id?: string; display_name?: string; transform?: { mul?: number; add?: number } }
@@ -1314,6 +1373,29 @@ function buildPayload(): MetricDefinitionCreate {
       baseline_lookback: form.compare === 'none' ? null : form.baseline_lookback,
     },
   }
+  if (form.metric_type === 'calculated') {
+    return {
+      ...common,
+      metric_type: 'calculated',
+      query_config: {
+        // 计算型指标不取数 —— 但 QueryConfig 的通用字段仍要带上（后端按类型解释）
+        host_group_ids: [],
+        host_ids: [],
+        item_ids: [],
+        formula: form.calc_formula_text,
+        variables: form.calc_variables
+          .filter((v) => v.name && v.metric_id != null)
+          .map((v) => ({ name: v.name, metric_id: Number(v.metric_id) })),
+        builtin_minutes: form.calc_builtin_minutes,
+      },
+      type_config: {
+        transform: {
+          mul: Number(form.calc_transform_mul),
+          add: Number(form.calc_transform_add),
+        },
+      },
+    }
+  }
   if (form.metric_type === 'curve') {
     return {
       ...common,
@@ -1845,7 +1927,7 @@ onMounted(load)
           :model-ids="form.model_ids"
           :instance-ids="form.instance_ids"
           :picks="aiopsPicks"
-          :metric-type="form.metric_type"
+          :metric-type="form.metric_type === 'calculated' ? 'scalar' : form.metric_type"
           @update:model-ids="form.model_ids = $event"
           @update:instance-ids="form.instance_ids = $event"
           @update:picks="aiopsPicks = $event"
@@ -2301,6 +2383,66 @@ onMounted(load)
           </el-form-item>
         </template>
 
+
+        <!-- 计算型指标（2026-11-12）：算式 + 变量定义 + 数值变换 -->
+        <template v-if="form.metric_type === 'calculated'">
+          <div class="form-section">算式</div>
+          <el-form-item label="算式" required>
+            <el-input
+              v-model="form.calc_formula_text"
+              placeholder="例：(100 - a) / 100 * minutes"
+              data-testid="calc-formula"
+            />
+            <span class="text-muted form-hint">
+              只允许数字、变量、+ - * / 和括号。变量名在下面定义；
+              <code>minutes</code> 是内置变量 = 所选周期的总分钟数（月报按日历月实际天数）。
+            </span>
+          </el-form-item>
+          <el-form-item label="提供 minutes">
+            <el-switch v-model="form.calc_builtin_minutes" />
+            <span class="text-muted form-hint">关闭后公式里不能用 minutes</span>
+          </el-form-item>
+
+          <div class="form-section">变量定义</div>
+          <div class="calc-vars">
+            <div v-for="(v, vi) in form.calc_variables" :key="vi" class="calc-var">
+              <el-input v-model="v.name" placeholder="变量名" class="calc-var__name" size="small" />
+              <el-select
+                v-model="v.metric_id"
+                filterable
+                placeholder="选择数值类型指标"
+                class="calc-var__metric"
+                size="small"
+                data-testid="calc-var-metric"
+              >
+                <el-option
+                  v-for="m in scalarMetricOptions"
+                  :key="m.id"
+                  :label="`${m.name}${m.unit ? ` (${m.unit})` : ''}`"
+                  :value="m.id"
+                />
+              </el-select>
+              <el-button link type="danger" @click="form.calc_variables.splice(vi, 1)">
+                删除
+              </el-button>
+            </div>
+            <el-button size="small" @click="addCalcVariable">添加变量</el-button>
+          </div>
+
+          <div class="form-section">数值变换（单位人工换算）</div>
+          <div class="transform-row">
+            <el-form-item label="乘以">
+              <el-input-number v-model="form.calc_transform_mul" :step="0.01" />
+            </el-form-item>
+            <el-form-item label="加上">
+              <el-input-number v-model="form.calc_transform_add" :step="1" />
+            </el-form-item>
+          </div>
+          <p class="text-muted form-hint">
+            最终值 = 算式结果 × 乘以 + 加上（例：算式算出分钟，要转小时就填 1/60）
+          </p>
+        </template>
+
         <template v-if="form.metric_type === 'scalar' || form.metric_type === 'curve'">
         <div class="form-section">计算配置</div>
         <!--
@@ -2504,6 +2646,23 @@ onMounted(load)
 </template>
 
 <style scoped lang="scss">
+.calc-vars {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: var(--space-3, 12px);
+}
+.calc-var {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.calc-var__name {
+  width: 120px;
+}
+.calc-var__metric {
+  flex: 1;
+}
 .action-cell {
   display: flex;
   align-items: center;
