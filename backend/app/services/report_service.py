@@ -67,6 +67,9 @@ ALLOWED_ACTIONS: dict[str, set[str]] = {
             "resend_confirmation",
         },
     "confirmed": {"push"},
+    # 「仅确认不发送」的终态：确认人线下自己处理了，系统不再发也不再催
+    # （2026-11-12）。无后续动作 —— 不可撤销，有问题重新手动触发。
+    "confirmed_no_push": set(),
     "pushed": set(),
     "push_failed": {"retry_push"},
     "failed": {"regenerate"},
@@ -365,6 +368,12 @@ async def run_generation(report_id: int, *, actor_id: int | None = None) -> str 
             await _mark_generation_failed(report_id, exc, actor_id)
             return None
 
+    # 报告正文转 PDF（确认页预览）。失败不影响报告生成 —— 只是少了预览。
+    try:
+        await convert_report_pdf(report_id)
+    except Exception:
+        logger.exception("PDF 转换异常（不影响报告）report_id=%d", report_id)
+
     # 邮件在事务外发送：SMTP 失败不影响实例状态（用户可"重新发送"）
     if raw_token:
         try:
@@ -372,6 +381,33 @@ async def run_generation(report_id: int, *, actor_id: int | None = None) -> str 
         except Exception as exc:
             logger.error("确认邮件发送失败 report=%d: %s", report_id, exc)
     return raw_token
+
+
+async def convert_report_pdf(report_id: int) -> str | None:
+    """把报告 DOCX 转成 PDF 并记到 ``report.pdf_path``（确认页预览用）。
+
+    转不动**不报错** —— 报告该生成还是生成，只是确认页少了 PDF 预览
+    （还能下载 Word）。
+    """
+    from app.services.pdf_converter import convert_docx_to_pdf
+
+    async with AsyncSessionLocal() as db:
+        report = await db.get(Report, report_id)
+        if report is None:
+            return None
+        docx_path = Path(report.file_path) if report.file_path else None
+        if docx_path is None or not docx_path.exists():
+            return None
+        out_dir = docx_path.parent
+    pdf_path = await convert_docx_to_pdf(docx_path, out_dir)
+    if pdf_path is None:
+        return None
+    async with AsyncSessionLocal() as db:
+        report = await db.get(Report, report_id)
+        if report is not None:
+            report.pdf_path = str(pdf_path)
+            await db.commit()
+    return str(pdf_path)
 
 
 async def _mark_generation_failed(
@@ -608,11 +644,60 @@ async def confirm(
     if summaries:
         try:
             await rebuild_report_with_summaries(report_id)
+            # 重渲染覆盖了 DOCX -> PDF 预览要跟着更新（否则预览与最终发出的不一致）
+            await convert_report_pdf(report_id)
         except Exception:
             logger.exception("报告重渲染失败（总结未写入）report_id=%d", report_id)
 
     ok, err = await push_confirmed(report_id, actor_id=None, action="push")
     return ("pushed" if ok else "push_failed"), err
+
+
+async def confirm_only(
+    report_id: int,
+    raw_token: str,
+    summaries: list[dict[str, Any]] | None = None,
+) -> None:
+    """**仅确认，不发送** —— 本轮报告自动化任务就此结束。
+
+    场景（2026-11-12）：确认人下载了报告、线下改完自己发给收件人了，
+    系统不该再发一次、也不该继续催办。点这个按钮就是告诉系统「我处理完了」。
+
+    与 :func:`confirm` 的区别：
+    - **不推送**（状态落在终态 ``confirmed_no_push``，推送逻辑不会碰它）
+    - 依然**消费一次性 token**（链接用掉就不能再确认）
+    - **不可撤销**（用户明确要求：有问题重新手动触发即可）
+    """
+    async with AsyncSessionLocal() as db:
+        report = await _get_locked(db, report_id)
+        if report.status != "pending_confirmation":
+            if report.status in ("confirmed", "pushed", "confirmed_no_push"):
+                raise ReportError("该链接已使用")
+            raise ReportError(f"状态 {report.status} 不允许确认")
+        if not token_matches(raw_token, report.confirmation_token):
+            if report.confirmation_token is None:
+                raise ReportError("该链接已使用")
+            raise ReportError("确认链接无效")
+        expires = _aware(report.expires_at)
+        if expires is not None and expires < datetime.now(timezone.utc):
+            raise ReportError("确认链接已过期，请联系管理员重新发送")
+
+        if summaries:
+            await _save_summary_snapshots(db, report, summaries)
+
+        report.confirmation_token = None  # 一次性
+        report.confirmed_at = datetime.now(timezone.utc)
+        report.confirmed_no_push_at = datetime.now(timezone.utc)
+        _set_status(report, "confirmed_no_push", "confirm_only")
+        _audit(
+            db,
+            report.id,
+            None,
+            "confirm_only",
+            f"确认人 {report.confirmer_email} 已确认（未通过系统发送）",
+        )
+        await db.commit()
+    logger.info("报告已确认但不发送 report_id=%d", report_id)
 
 
 async def _save_summary_snapshots(

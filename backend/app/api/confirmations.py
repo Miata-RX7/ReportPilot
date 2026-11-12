@@ -10,8 +10,9 @@
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pathlib import Path
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,6 +26,10 @@ from app.services import report_service
 from app.services.docx_renderer import open_template, template_variables
 from app.services.report_service import ReportError
 from app.services.task_service import token_matches
+
+DOCX_MIME = (
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+)
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +127,7 @@ async def preview_confirmation(
     return ConfirmPreview(
         summary_placeholders=await _summary_placeholders(db, report),
         summary_placeholder_labels=await _summary_labels(db, report),
+        docx_downloaded_at=report.docx_downloaded_at,
         report_id=report.id,
         report_name=name,
         period=report.period,
@@ -136,6 +142,110 @@ async def preview_confirmation(
         abnormal_count=abnormal,
         token_state=state,
         message=message,
+    )
+
+
+@router.post("/{report_id}/confirm-only")
+async def confirm_only_report(
+    report_id: int,
+    payload: ConfirmRequest,
+    db: AsyncSession = Depends(get_db),
+) -> ConfirmResult:
+    """**仅确认，不发送** —— 本轮报告自动化任务就此结束。
+
+    场景：确认人下载了报告、线下改完自己发给收件人了。点这个按钮就是告诉系统
+    「我处理完了」，系统不再发送、也不再催办。不可撤销。
+    """
+    exists = await db.scalar(select(Report.id).where(Report.id == report_id))
+    if exists is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "报告不存在")
+    try:
+        await report_service.confirm_only(
+            report_id,
+            payload.token,
+            summaries=[s.model_dump() for s in payload.summaries],
+        )
+    except ReportError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
+    return ConfirmResult(
+        report_id=report_id,
+        confirmed=True,
+        push_status="not_pushed",
+        message="已确认，本轮报告任务已结束（未通过系统发送）",
+    )
+
+
+@router.post("/{report_id}/downloaded")
+async def mark_docx_downloaded(
+    report_id: int,
+    token: str = Query(..., description="确认链接的一次性 token"),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    """记录「确认人下载过 Word 版」。
+
+    下载是浏览器行为，后端默认不知道 —— 让前端在点击下载时上报一次。
+    记在服务器上而不是 localStorage：刷新页面、换浏览器、甚至链接被转发，
+    提醒都还在。
+    """
+    report = await db.get(Report, report_id)
+    if report is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "报告不存在")
+    if not token_matches(token, report.confirmation_token):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "确认链接无效")
+    report.docx_downloaded_at = datetime.now(timezone.utc)
+    await db.commit()
+    return {"ok": True}
+
+
+@router.get("/{report_id}/preview.pdf")
+async def preview_report_pdf(
+    report_id: int,
+    token: str = Query(..., description="确认链接的一次性 token"),
+    db: AsyncSession = Depends(get_db),
+) -> FileResponse:
+    """报告 PDF 预览（免登录，凭 token）。
+
+    预览的就是**最终发出的那份** —— 生成时转的 PDF，重渲染后同步更新。
+    """
+    report = await db.get(Report, report_id)
+    if report is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "报告不存在")
+    if not token_matches(token, report.confirmation_token):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "确认链接无效")
+    if not report.pdf_path or not Path(report.pdf_path).exists():
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "报告预览不可用（未生成 PDF）")
+    return FileResponse(
+        report.pdf_path,
+        media_type="application/pdf",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@router.get("/{report_id}/download.docx")
+async def download_report_docx(
+    report_id: int,
+    token: str = Query(..., description="确认链接的一次性 token"),
+    db: AsyncSession = Depends(get_db),
+) -> FileResponse:
+    """下载报告 Word 版（免登录，凭 token）。
+
+    确认人下载后通常会线下改 —— 所以下载动作会**上报**（见 /downloaded），
+    页面据此提醒「您可能已线下发送，请点『仅确认不发送』结束本轮任务」。
+    """
+    report = await db.get(Report, report_id)
+    if report is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "报告不存在")
+    if not token_matches(token, report.confirmation_token):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "确认链接无效")
+    if not report.file_path or not Path(report.file_path).exists():
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "报告文件不存在")
+    tpl = await db.get(WordTemplate, report.template_id)
+    filename = f"{tpl.name if tpl else 'report'}_{report.period}.docx"
+    return FileResponse(
+        report.file_path,
+        media_type=DOCX_MIME,
+        filename=filename,
+        headers={"Cache-Control": "no-store"},
     )
 
 

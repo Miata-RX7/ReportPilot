@@ -742,6 +742,8 @@ export interface ConfirmPreview {
   metric_count: number
   abnormal_count: number
   /** 模板里声明的「总结_」占位（不含大括号），确认人据此选择把总结填到哪一处 */
+  /** 确认人下载过 Word 版的时间（有值 -> 提醒他点「仅确认不发送」） */
+  docx_downloaded_at?: string | null
   /** {占位名: 显示名}，如 { summary_assets_info: '资产信息' } */
   summary_placeholder_labels?: Record<string, string>
   summary_placeholders?: string[]

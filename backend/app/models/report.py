@@ -13,13 +13,15 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, JSONVariant, TimestampMixin
 
-# 7 态：pending / generating / pending_confirmation / confirmed /
-#      pushed / push_failed / failed
+# 8 态：pending / generating / pending_confirmation / confirmed /
+#      pushed / push_failed / failed / confirmed_no_push
 REPORT_STATUSES = (
     "pending",
     "generating",
     "pending_confirmation",
     "confirmed",
+    # 「仅确认不发送」的终态：确认人自己线下处理了，系统不再发也不再催（2026-11-12）
+    "confirmed_no_push",
     "pushed",
     "push_failed",
     "failed",
@@ -85,6 +87,18 @@ class Report(TimestampMixin, Base):
         DateTime(timezone=True), nullable=True
     )
     # 链接过期时刻 = confirmation_sent_at + TTL；过期后停提醒但状态不变
+    #: 「仅确认不发送」的时间 —— 该报告进入终态，系统不再催办也不再发送
+    confirmed_no_push_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    #: 确认页下载过 Word 版的时间（用来提醒「您可能已线下修改并发送」）
+    docx_downloaded_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    #: 报告 PDF 预览缓存（生成时由 ONLYOFFICE converter 转一次）
+    pdf_path: Mapped[str | None] = mapped_column(String(512), nullable=True, index=True)
+    #: 预留：将来支持「上传改好的文件由系统发送」时，最终发送的文件路径
+    final_file_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
     expires_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

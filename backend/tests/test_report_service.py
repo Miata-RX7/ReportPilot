@@ -47,12 +47,14 @@ class TestStateMachineTable:
     def test_model_and_service_agree(self) -> None:
         assert set(ALLOWED_ACTIONS) == set(REPORT_STATUSES)
 
-    def test_seven_statuses(self) -> None:
+    def test_eight_statuses(self) -> None:
         assert REPORT_STATUSES == (
             "pending",
             "generating",
             "pending_confirmation",
             "confirmed",
+            # 「仅确认不发送」的终态（2026-11-12）
+            "confirmed_no_push",
             "pushed",
             "push_failed",
             "failed",

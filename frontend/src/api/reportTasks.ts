@@ -51,6 +51,21 @@ export const confirmApi = {
    * 确认并推送。``summaries`` 是确认人最终提交的总结（人工编辑后的文本）——
    * 后端会把它**快照**下来，报告重渲染时填进「总结_」占位。
    */
+  /** 「仅确认不发送」：结束本轮报告任务，系统不再发送也不再催办 */
+  confirmOnly(
+    reportId: number,
+    token: string,
+    summaries: {
+      file_id: number
+      placeholder: string
+      prompt: string
+      text: string
+      categories: object[]
+      verification: object
+    }[] = [],
+  ) {
+    return http.post<ConfirmResult>(`/confirm/${reportId}/confirm-only`, { token, summaries })
+  },
   confirm(
     reportId: number,
     token: string,
