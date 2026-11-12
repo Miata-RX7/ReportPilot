@@ -76,7 +76,7 @@ async function onSubmit() {
       </el-form>
 
       <div class="login-hint text-muted">
-        账号由管理员通过 CLI 创建：<code>python -m app.cli create-user</code>
+        admin / ops 使用本地账号；其余用户使用 AD 域账号（如 <code>337</code>，无需输入域）
       </div>
     </el-card>
   </div>

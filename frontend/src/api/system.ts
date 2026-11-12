@@ -122,6 +122,13 @@ export interface AiPromptPreviewResult {
   metric_count: number
 }
 
+import type {
+  AdSettings,
+  AdSettingsUpdate,
+  AdSyncResult,
+  AdTestResult,
+} from './adTypes'
+
 export const systemApi = {
   /** baseURL 已是 /api，这里只写相对路径 */
   async settings() {
@@ -138,6 +145,30 @@ export const systemApi = {
   /** 保存 AI 集成（需管理员），返回保存后的最新概览 */
   async updateAi(payload: AiSettingsUpdate) {
     const { data } = await http.put<SystemSettings>('/system/settings/ai', payload)
+    return data
+  },
+
+  /** 读 AD 对接配置（不含密码） */
+  async adSettings() {
+    const { data } = await http.get<AdSettings>('/system/settings/ad')
+    return data
+  },
+
+  /** 保存 AD 对接配置（bind_password 留空 = 不修改） */
+  async updateAd(payload: AdSettingsUpdate) {
+    const { data } = await http.put<AdSettings>('/system/settings/ad', payload)
+    return data
+  },
+
+  /** 测试 AD 连接 */
+  async testAd() {
+    const { data } = await http.post<AdTestResult>('/system/settings/ad/test')
+    return data
+  },
+
+  /** 立即同步一次 AD 用户 */
+  async syncAd() {
+    const { data } = await http.post<AdSyncResult>('/system/settings/ad/sync')
     return data
   },
 

@@ -19,6 +19,7 @@ import {
   type SystemSettings,
 } from '@/api/system'
 import { userApi } from '@/api/users'
+import type { AdSettings } from '@/api/adTypes'
 import type { UserRead } from '@/api/types'
 import { useAuthStore } from '@/stores/auth'
 import { parseApiError } from '@/utils/error'
@@ -200,6 +201,116 @@ async function onTransfer() {
   }
 }
 
+/* ---- AD 对接（2026-11-12） ---- */
+const adSettings = ref<AdSettings | null>(null)
+const adEditVisible = ref(false)
+const adSaving = ref(false)
+const adTesting = ref(false)
+const adSyncing = ref(false)
+const adForm = reactive({
+  server: '',
+  bind_dn: '',
+  bind_password: '',
+  base_dn: '',
+  user_filter: '(objectClass=user)',
+  map_username: 'sAMAccountName',
+  map_display_name: 'displayName',
+  map_email: 'mail',
+  sync_enabled: true,
+  sync_interval_minutes: 30,
+  timeout_seconds: 15,
+})
+
+async function loadAdSettings() {
+  try {
+    adSettings.value = await systemApi.adSettings()
+  } catch (error) {
+    // AD 未配置 / 后端未启用时不打扰管理员
+    console.warn('AD 设置读取失败', error)
+  }
+}
+
+function openAdEdit() {
+  const s = adSettings.value
+  if (s) {
+    adForm.server = s.server
+    adForm.bind_dn = s.bind_dn
+    adForm.bind_password = '' // 密码不回显；留空 = 不修改
+    adForm.base_dn = s.base_dn
+    adForm.user_filter = s.user_filter
+    adForm.map_username = s.map_username
+    adForm.map_display_name = s.map_display_name
+    adForm.map_email = s.map_email
+    adForm.sync_enabled = s.sync_enabled
+    adForm.sync_interval_minutes = s.sync_interval_minutes
+    adForm.timeout_seconds = s.timeout_seconds
+  }
+  adEditVisible.value = true
+}
+
+async function onSaveAd() {
+  adSaving.value = true
+  try {
+    adSettings.value = await systemApi.updateAd({
+      server: adForm.server,
+      bind_dn: adForm.bind_dn,
+      bind_password: adForm.bind_password || undefined,
+      base_dn: adForm.base_dn,
+      user_filter: adForm.user_filter,
+      map_username: adForm.map_username,
+      map_display_name: adForm.map_display_name,
+      map_email: adForm.map_email,
+      sync_enabled: adForm.sync_enabled,
+      sync_interval_minutes: adForm.sync_interval_minutes,
+      timeout_seconds: adForm.timeout_seconds,
+    })
+    adEditVisible.value = false
+    ElMessage.success('AD 配置已保存')
+  } catch (error) {
+    ElMessage.error(parseApiError(error).message)
+  } finally {
+    adSaving.value = false
+  }
+}
+
+async function onTestAd() {
+  adTesting.value = true
+  try {
+    const r = await systemApi.testAd()
+    if (r.ok) {
+      const s = r.sample
+      ElMessage.success(
+        `${r.message}${s ? `；示例：${s.username} / ${s.display_name} / ${s.email}` : ''}`,
+      )
+    } else {
+      ElMessage.error(r.message)
+    }
+  } catch (error) {
+    ElMessage.error(parseApiError(error).message)
+  } finally {
+    adTesting.value = false
+  }
+}
+
+async function onSyncAd() {
+  adSyncing.value = true
+  try {
+    const r = await systemApi.syncAd()
+    ElMessage.success(
+      `同步完成：共 ${r.total} 人，新建 ${r.created}，更新 ${r.updated}，` +
+        `停用 ${r.disabled}，启用 ${r.reactivated}，AD 中已删除 ${r.vanished}`,
+    )
+    if (r.errors.length) {
+      ElMessage.warning(`${r.errors.length} 条异常：${r.errors[0]}`)
+    }
+    await loadUsers()
+  } catch (error) {
+    ElMessage.error(parseApiError(error).message)
+  } finally {
+    adSyncing.value = false
+  }
+}
+
 /* ---- 用户管理 ---- */
 const users = ref<UserRead[]>([])
 const usersLoading = ref(false)
@@ -337,6 +448,7 @@ async function onDeleteUser(row: UserRead) {
 onMounted(() => {
   void loadSettings()
   void loadUsers()
+  void loadAdSettings()
 })
 </script>
 
@@ -529,6 +641,124 @@ onMounted(() => {
               </el-card>
             </el-col>
 
+      <!-- AD / LDAP 对接（2026-11-12） -->
+      <el-col :span="24">
+        <el-card shadow="never" class="cfg-card" data-testid="cfg-card-ad">
+          <template #header>
+            <div class="card-head">
+              <span>AD 对接（域账号登录）</span>
+              <div class="card-head__actions">
+                <el-tag
+                  v-if="adSettings"
+                  :type="adSettings.configured ? 'success' : 'info'"
+                  size="small"
+                  data-testid="cfg-tag-ad"
+                >
+                  {{ adSettings.configured ? '已配置' : '未配置完整' }}
+                </el-tag>
+                <el-tag
+                  v-if="adSettings"
+                  :type="adSettings.sync_enabled ? 'success' : 'info'"
+                  size="small"
+                >
+                  自动同步{{ adSettings.sync_enabled ? '开启' : '关闭' }}
+                </el-tag>
+                <el-button size="small" @click="openAdEdit">配置</el-button>
+                <el-button size="small" :loading="adTesting" @click="onTestAd">
+                  测试连接
+                </el-button>
+                <el-button size="small" :loading="adSyncing" @click="onSyncAd">
+                  立即同步
+                </el-button>
+              </div>
+            </div>
+          </template>
+          <el-descriptions :column="2" size="small" border v-if="adSettings">
+            <el-descriptions-item label="服务器">{{ adSettings.server || '—' }}</el-descriptions-item>
+            <el-descriptions-item label="绑定账号">{{ adSettings.bind_dn || '—' }}</el-descriptions-item>
+            <el-descriptions-item label="根 DN">{{ adSettings.base_dn || '—' }}</el-descriptions-item>
+            <el-descriptions-item label="绑定密码">
+              <span :class="adSettings.bind_password_set ? '' : 'text-muted'">
+                {{ adSettings.bind_password_set ? '已配置' : '未配置' }}
+              </span>
+            </el-descriptions-item>
+            <el-descriptions-item label="登录名映射">
+              <span class="code-chip">{{ adSettings.map_username }}</span>
+            </el-descriptions-item>
+            <el-descriptions-item label="显示名映射">
+              <span class="code-chip">{{ adSettings.map_display_name }}</span>
+            </el-descriptions-item>
+            <el-descriptions-item label="邮箱映射">
+              <span class="code-chip">{{ adSettings.map_email }}</span>
+            </el-descriptions-item>
+            <el-descriptions-item label="同步间隔">
+              {{ adSettings.sync_interval_minutes }} 分钟
+            </el-descriptions-item>
+          </el-descriptions>
+          <el-skeleton v-else :rows="4" animated />
+          <p class="text-muted cfg-hint">
+            admin / ops 走本地账号，其余用户走 AD 认证（登录时直接输 AD 账号名，
+            如 337，不用输 337@livecom.hk）。AD 用户首次登录会自动建档；
+            账号被 AD 禁用后同步会自动停用对应账号。
+          </p>
+        </el-card>
+      </el-col>
+
+      <!-- AD 配置弹窗 -->
+      <el-dialog v-model="adEditVisible" title="AD 对接配置" width="min(680px, 94vw)">
+        <el-form :model="adForm" label-width="120px" class="ad-form">
+          <el-form-item label="服务器地址">
+            <el-input v-model="adForm.server" placeholder="ldap://ldap.livecom.ltd:389" />
+          </el-form-item>
+          <el-form-item label="绑定账号">
+            <el-input v-model="adForm.bind_dn" placeholder="read_conn@livecom.hk" />
+          </el-form-item>
+          <el-form-item label="绑定密码">
+            <el-input
+              v-model="adForm.bind_password"
+              type="password"
+              show-password
+              placeholder="留空表示不修改已存密码"
+            />
+          </el-form-item>
+          <el-form-item label="根 DN">
+            <el-input v-model="adForm.base_dn" placeholder="dc=livecom,dc=hk" />
+          </el-form-item>
+          <el-form-item label="用户过滤器">
+            <el-input v-model="adForm.user_filter" placeholder="(objectClass=user)" />
+          </el-form-item>
+
+          <div class="ad-form__section">字段映射</div>
+          <el-form-item label="登录名">
+            <el-input v-model="adForm.map_username" placeholder="sAMAccountName" />
+          </el-form-item>
+          <el-form-item label="显示名">
+            <el-input v-model="adForm.map_display_name" placeholder="displayName" />
+          </el-form-item>
+          <el-form-item label="邮箱">
+            <el-input v-model="adForm.map_email" placeholder="mail" />
+          </el-form-item>
+
+          <div class="ad-form__section">同步</div>
+          <el-form-item label="自动同步">
+            <el-switch v-model="adForm.sync_enabled" />
+            <span class="text-muted cfg-hint ml8">关闭后不再自动建档/同步状态</span>
+          </el-form-item>
+          <el-form-item label="同步间隔">
+            <el-input-number v-model="adForm.sync_interval_minutes" :min="1" :max="1440" />
+            <span class="text-muted cfg-hint ml8">分钟</span>
+          </el-form-item>
+          <el-form-item label="连接超时">
+            <el-input-number v-model="adForm.timeout_seconds" :min="1" :max="120" />
+            <span class="text-muted cfg-hint ml8">秒</span>
+          </el-form-item>
+        </el-form>
+        <template #footer>
+          <el-button @click="adEditVisible = false">取消</el-button>
+          <el-button type="primary" :loading="adSaving" @click="onSaveAd">保存</el-button>
+        </template>
+      </el-dialog>
+
             <el-col :span="12">
               <el-card shadow="never" class="cfg-card" data-testid="cfg-card-confirm">
                 <template #header><span>确认流程</span></template>
@@ -581,6 +811,7 @@ onMounted(() => {
             <el-button
               v-if="auth.isAdmin"
               type="primary"
+              class="hidden-user-create"
               data-testid="user-create"
               @click="openUserCreate"
             >
@@ -892,6 +1123,12 @@ onMounted(() => {
 </template>
 
 <style scoped lang="scss">
+/* 「新建用户」按钮暂时隐藏（2026-11-12）：用户由 AD 同步自动建档，
+   本地手工新建的需求还没想清楚。先用 CSS 藏入口，逻辑与弹窗都保留，
+   把这个 class 去掉即可恢复。 */
+.hidden-user-create {
+  display: none !important;
+}
 .transfer-form {
   margin-top: var(--space-3, 12px);
 }
