@@ -72,6 +72,12 @@ export type AggType = 'sum' | 'avg' | 'max' | 'min'
 export type CompareType = 'none' | 'mom' | 'yoy'
 
 export interface QueryConfig {
+  /** 计算型指标：算式（只允许数字/变量/+ - * / /括号） */
+  formula?: string
+  /** 计算型指标：变量名 -> 基础 scalar 指标 id */
+  variables?: { name: string; metric_id: number }[]
+  /** 计算型指标：是否提供内置变量 minutes（= 周期总分钟数） */
+  builtin_minutes?: boolean
   /** Zabbix 主机组（与 host_ids 成对出现） */
   host_group_ids: string[]
   /** Zabbix 主机（须属于 host_group_ids） */
@@ -92,7 +98,7 @@ export interface QueryConfig {
   value_type_override?: number[] | null
 }
 
-export type MetricType = 'scalar' | 'curve' | 'pie' | 'text' | 'time'
+export type MetricType = 'scalar' | 'curve' | 'pie' | 'text' | 'time' | 'calculated'
 
 /** MetricFact.value 的形态，消费端据此解析 */
 export type ValueShape = 'scalar' | 'series' | 'pie' | 'text'

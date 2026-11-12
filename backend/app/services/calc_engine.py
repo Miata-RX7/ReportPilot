@@ -26,8 +26,10 @@ from app.schemas.metric import (
     Transform,
 )
 from app.services.adapters.base import AdapterError, DataSourceAdapter
+from app.services.expr_eval import ExpressionError, evaluate, parse_expression
 from app.services.period_utils import (
     baseline_range,
+    period_minutes,
     period_to_unix_range,
     shift_period,
 )
@@ -337,6 +339,8 @@ async def compute_metric(
         fact = await _compute_curve(metric_def, period, adapter, source_name)
     elif metric_type == "pie":
         fact = await _compute_pie(metric_def, period, adapter, source_name)
+    elif metric_type == "calculated":
+        fact = await _compute_calculated(metric_def, period, adapter, source_name)
     else:
         raise MetricComputeError(f"未知的 metric_type: {metric_type}")
     _apply_unit_scale(fact, metric_def)
@@ -682,6 +686,132 @@ def pie_labels(metric_def: MetricDefinition) -> tuple[str, str]:
     if up == {"1"} and down == {"0"}:
         return ("通", "断")
     return ("UP", "DOWN")
+
+
+async def _compute_calculated(
+    metric_def: MetricDefinition,
+    period: str,
+    adapter: DataSourceAdapter | None,
+    source_name: str,
+) -> MetricFact:
+    """计算型指标：若干**基础 scalar 指标**经四则运算得出一个数值。
+
+    2026-11-12。规则：
+    - 变量只能引用**基础 scalar 指标**（不含计算型/曲线/饼图/文本）——
+      所以**不存在循环引用**，不需要递归。
+    - 被引用的指标必须与计算型指标**同数据源**（保存时校验）——
+      所以这里直接用传入的 adapter 取数，不需要自己开 session 建 adapter。
+    - 内置变量 ``minutes`` = 所选周期的总分钟数（见 period_utils.period_minutes）。
+    - 结果套自己的 transform（mul/add）做单位人工换算。
+    """
+    cfg = metric_def.query_config or {}
+    formula = str(cfg.get("formula") or "").strip()
+    if not formula:
+        raise MetricComputeError("计算型指标缺少算式")
+    variables = cfg.get("variables") or []
+
+    try:
+        parsed = parse_expression(formula)
+    except ExpressionError as exc:
+        raise MetricComputeError(f"算式非法：{exc}") from None
+
+    values: dict[str, float] = {}
+    if cfg.get("builtin_minutes", True):
+        values["minutes"] = period_minutes(period)
+    defined: set[str] = set(values.keys())
+
+    for var in variables:
+        name = str(var.get("name") or "").strip()
+        metric_id = var.get("metric_id")
+        if not name or metric_id is None:
+            raise MetricComputeError("计算型指标的变量定义不完整")
+        if name in defined:
+            raise MetricComputeError(f"计算型指标的变量名重复：{name}")
+        defined.add(name)
+        values[name] = await _calculated_variable_value(
+            metric_def, name, int(metric_id), period, adapter, source_name
+        )
+
+    missing = [v for v in parsed.variables if v not in defined]
+    if missing:
+        raise MetricComputeError(f"算式里的变量未定义：{', '.join(missing)}")
+
+    try:
+        raw = evaluate(parsed, values)
+    except ExpressionError as exc:
+        raise MetricComputeError(f"计算型指标算式求值失败：{exc}") from None
+
+    tf = (metric_def.type_config or {}).get("transform") or {}
+    mul = float(tf.get("mul", 1.0) or 1.0)
+    add = float(tf.get("add", 0.0) or 0.0)
+    value = raw * mul + add
+
+    logger.info(
+        "计算型指标完成 name=%s period=%s formula=%s raw=%s value=%s",
+        metric_def.name,
+        period,
+        formula,
+        raw,
+        value,
+    )
+    return MetricFact(
+        metric_id=metric_def.id,
+        name=metric_def.name,
+        value=value,
+        value_shape="scalar",
+        formula=f"{formula} = {raw}",
+    )
+
+
+async def _calculated_variable_value(
+    parent: MetricDefinition,
+    var_name: str,
+    metric_id: int,
+    period: str,
+    adapter: DataSourceAdapter | None,
+    source_name: str,
+) -> float:
+    """取一个被引用变量的数值（必须是基础 scalar 指标，且与计算型指标同数据源）。"""
+    dep = await _load_metric(metric_id)
+    if dep is None:
+        raise MetricComputeError(f"计算型指标引用的指标不存在：id={metric_id}")
+    if not dep.is_active:
+        raise MetricComputeError(f"计算型指标引用的指标已停用：{dep.name}")
+    dep_type = dep.metric_type or "scalar"
+    if dep_type == "calculated":
+        raise MetricComputeError(f"暂不支持引用计算型指标：{dep.name}")
+    if dep_type != "scalar":
+        raise MetricComputeError(
+            f"「{dep.name}」是{dep_type}类型指标，不能参与计算（只能引用数值类型指标）"
+        )
+    if dep.data_source_id != parent.data_source_id:
+        raise MetricComputeError(
+            f"「{dep.name}」与计算型指标的数据源不同，无法计算"
+        )
+    if adapter is None:
+        raise MetricComputeError(
+            f"计算型指标「{parent.name}」没有数据源，无法取被引用的指标"
+        )
+    fact = await compute_metric(dep, period, adapter, source_name)
+    value = fact.value
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise MetricComputeError(f"计算型指标引用的「{dep.name}」不是数值")
+    return float(value)
+
+
+async def _load_metric(metric_id: int) -> MetricDefinition | None:
+    """按 id 取指标定义。
+
+    calc_engine 其它分支都是无状态的（adapter 由调用方传入），但计算型指标
+    需要知道**被引用指标的定义**（类型 / 是否停用 / 数据源是否一致）才能安全
+    求值。这里自开一个短事务的 session 读一次 —— 只读、只在计算型指标路径上
+    触发，不影响其它分支的性能模型。
+    """
+    from app.database import AsyncSessionLocal
+    from app.models.metric import MetricDefinition as _MD
+
+    async with AsyncSessionLocal() as db:
+        return await db.get(_MD, metric_id)
 
 
 async def _compute_pie(

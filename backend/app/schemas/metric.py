@@ -21,7 +21,7 @@ from pydantic import (
 
 from app.services.period_utils import PERIOD_PATTERN
 
-MetricType = Literal["scalar", "curve", "pie", "text", "time"]
+MetricType = Literal["scalar", "curve", "pie", "text", "time", "calculated"]
 ValueShape = Literal["scalar", "series", "pie", "text"]
 
 
@@ -500,11 +500,83 @@ class _MetricCommon(BaseModel):
         return self
 
 
+class CalculatedQueryConfig(BaseModel):
+    """计算型指标：算式 + 变量定义。
+
+    - ``formula``：只允许数字 / 变量 / + - * / / 括号
+    - ``variables``：变量名 -> 基础 scalar 指标 id
+    - ``builtin_minutes``：是否提供内置变量 ``minutes``（报告周期总分钟数）
+    """
+
+    formula: str = Field(min_length=1, max_length=500)
+    variables: list[CalculatedVariable] = Field(default_factory=list)
+    #: 提供内置变量 minutes（= 所选周期的总分钟数）。默认开。
+    builtin_minutes: bool = True
+
+    @model_validator(mode="after")
+    def _check_variables(self) -> "CalculatedQueryConfig":
+        names = [v.name for v in self.variables]
+        dup = {n for n in names if names.count(n) > 1}
+        if dup:
+            raise ValueError(f"变量名重复：{', '.join(sorted(dup))}")
+        return self
+
+
+class CalculatedVariable(BaseModel):
+    """计算型指标公式里的一个变量。"""
+
+    #: 公式里使用的名字（ASCII 标识符）
+    name: str = Field(min_length=1, max_length=32, pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
+    #: 引用的**基础 scalar 指标** id（不允许引用计算型/曲线/饼图/文本）
+    metric_id: int
+
+
+class CalculatedTypeConfig(BaseModel):
+    """计算型指标的「数值变换」——结果的单位人工换算（mul / add）。
+
+    与其它指标的 type_config.transform 语义完全一致：
+        最终值 = 算式结果 × mul + add
+    """
+
+    transform: Transform = Field(default_factory=Transform)
+
+
 class ScalarMetricCreate(_MetricCommon):
     metric_type: Literal["scalar"]
     query_config: ScalarQueryConfig
     type_config: ScalarTypeConfig = Field(default_factory=ScalarTypeConfig)
     calc_formula: CalcFormula = Field(default_factory=CalcFormula)
+
+
+class CalculatedMetricCreate(_MetricCommon):
+    """计算型指标：由若干**基础 scalar 指标**经四则运算得出一个数值。
+
+    2026-11-12。算式只允许数字 / 变量 / + - * / / 括号
+    （见 services/expr_eval.py）。
+
+    - **不需要数据源**（不取数）
+    - 变量只能引用**基础 scalar 指标**（不含计算型/曲线/饼图/文本）
+    - 结果走自己的 transform（mul/add）做单位人工换算
+    """
+
+    metric_type: Literal["calculated"]
+    query_config: CalculatedQueryConfig
+    type_config: CalculatedTypeConfig = Field(default_factory=CalculatedTypeConfig)
+    calc_formula: CalcFormula = Field(default_factory=CalcFormula)
+
+    @model_validator(mode="after")
+    def _check_calculated_scope(self) -> "CalculatedMetricCreate":
+        """计算型指标本身不取数，但**必须指定数据源**。
+
+        原因：它引用的基础指标要从那个数据源取数，而 calc_engine 是无状态纯函数
+        （adapter 由调用方按 data_source_id 构建并传入）。所以：
+        - 计算型指标声明自己的数据源
+        - 被引用的指标必须**与它同数据源**（保存时校验，见 services/calculated_metrics.py）
+        这样不需要在计算层再开 session 建 adapter。
+        """
+        if self.unit_config is not None and self.unit_config.mode != "none":
+            raise ValueError("计算型指标不支持单位换算（用「数值变换」做换算）")
+        return self
 
 
 class CurveMetricCreate(_MetricCommon):
@@ -563,6 +635,7 @@ MetricCreate = Annotated[
         PieMetricCreate,
         TextMetricCreate,
         TimeMetricCreate,
+        CalculatedMetricCreate,
     ],
     Field(discriminator="metric_type"),
 ]

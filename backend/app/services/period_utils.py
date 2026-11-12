@@ -102,6 +102,18 @@ def _week_start(period: str) -> datetime:
     return datetime.fromisocalendar(year, week, 1).replace(tzinfo=site_tz())
 
 
+def period_minutes(period: str) -> float:
+    """周期的总分钟数（内置变量 ``minutes`` 的值）。
+
+    例：月报 ``2026-10`` -> 44640（31 天）；周报 ``2026-W41`` -> 10080（7 天）。
+
+    注意：月粒度按**日历月实际天数**算（2 月 28/29 天），不是固定 30 天 ——
+    中断时长这类指标按固定天数算会错。
+    """
+    start, end = period_to_unix_range(period)
+    return (end - start) / 60.0
+
+
 def period_to_unix_range(period: str) -> tuple[int, int]:
     """本期区间 [起, 止)，Unix 秒。
 
