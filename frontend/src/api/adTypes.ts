@@ -61,5 +61,7 @@ export interface AdSyncResult {
   reactivated: number
   vanished: number
   skipped_no_email: number
+  /** AD 里已禁用、首次建档时跳过的账号数 */
+  skipped_disabled: number
   errors: string[]
 }

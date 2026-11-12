@@ -77,7 +77,7 @@ class AdConfig:
     server: str
     bind_dn: str
     bind_password: str
-    base_dn: str
+    base_dn: str = "ou=livecom,dc=livecom,dc=hk"
     user_filter: str = "(&(objectClass=user)(sAMAccountType=805306368))"
     map_username: str = "sAMAccountName"
     map_display_name: str = "displayName"

@@ -50,6 +50,8 @@ class SyncResult:
     reactivated: int = 0
     vanished: int = 0
     skipped_no_email: int = 0
+    #: AD 里已禁用、**首次建档时跳过**的账号数
+    skipped_disabled: int = 0
     errors: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
@@ -61,6 +63,7 @@ class SyncResult:
             "reactivated": self.reactivated,
             "vanished": self.vanished,
             "skipped_no_email": self.skipped_no_email,
+            "skipped_disabled": self.skipped_disabled,
             "errors": self.errors[:20],
         }
 
@@ -106,6 +109,11 @@ async def sync_users(db: AsyncSession, cfg: AdConfig) -> SyncResult:
             # 本地账号（admin / ops）不受 AD 同步影响
             continue
         if user is None:
+            # **初次建档只同步 AD 里启用的账号** —— 已禁用的不该进系统。
+            # 后续自动同步时，若某个已建档的用户被 AD 禁用 -> 改为停用（下面那段）。
+            if au.disabled:
+                result.skipped_disabled += 1
+                continue
             if not au.email:
                 result.skipped_no_email += 1
                 continue
@@ -171,13 +179,14 @@ async def sync_users(db: AsyncSession, cfg: AdConfig) -> SyncResult:
         return result
 
     logger.info(
-        "AD 同步完成：新建 %d 更新 %d 停用 %d 启用 %d 消失 %d 跳过 %d",
+        "AD 同步完成：新建 %d 更新 %d 停用 %d 启用 %d 消失 %d 无邮箱跳过 %d 已禁用跳过 %d",
         result.created,
         result.updated,
         result.disabled,
         result.reactivated,
         result.vanished,
         result.skipped_no_email,
+        result.skipped_disabled,
     )
     return result
 
