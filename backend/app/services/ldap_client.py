@@ -43,6 +43,12 @@ logger = logging.getLogger(__name__)
 #: userAccountControl 的 ACCOUNTDISABLE 位
 ACCOUNTDISABLE = 0x2
 
+#: AD 内置的系统账号 —— 不是真人，不该建档
+#: （Guest / krbtgt / DefaultAccount 等）
+EXCLUDED_USERNAMES: frozenset[str] = frozenset(
+    {"guest", "krbtgt", "defaultaccount", "anonymous logon"}
+)
+
 
 class AdError(Exception):
     """AD 不可用 / 配置不完整 / 查询失败。"""
@@ -72,7 +78,7 @@ class AdConfig:
     bind_dn: str
     bind_password: str
     base_dn: str
-    user_filter: str = "(objectClass=user)"
+    user_filter: str = "(&(objectClass=user)(sAMAccountType=805306368))"
     map_username: str = "sAMAccountName"
     map_display_name: str = "displayName"
     map_email: str = "mail"
@@ -133,8 +139,12 @@ def _connect(cfg: AdConfig) -> Connection:
         raise AdError(f"AD 连接失败：{exc}") from exc
 
 
-def _to_user(entry: dict[str, Any], cfg: AdConfig) -> AdUser | None:
-    attrs = entry.get("attributes") or {}
+def _to_user(attrs: dict[str, Any], dn: str, cfg: AdConfig) -> AdUser | None:
+    """把 ldap3 的属性字典转成 AdUser。
+
+    ldap3 的 ``Entry`` 不能直接 dict()，也没有 ``entry_to_dict()``（2.9.1）——
+    要用 ``entry.entry_attributes_as_dict``（属性）+ ``entry.entry_dn``（DN）。
+    """
 
     def first(name: str) -> str:
         v = attrs.get(name)
@@ -149,6 +159,8 @@ def _to_user(entry: dict[str, Any], cfg: AdConfig) -> AdUser | None:
     username = first(cfg.map_username)
     if not username:
         return None
+    if username.lower() in EXCLUDED_USERNAMES:
+        return None
     uac = first("userAccountControl")
     try:
         disabled = bool(int(uac) & ACCOUNTDISABLE) if uac else False
@@ -158,7 +170,7 @@ def _to_user(entry: dict[str, Any], cfg: AdConfig) -> AdUser | None:
         username=username,
         display_name=first(cfg.map_display_name) or username,
         email=first(cfg.map_email),
-        dn=entry.get("dn") or "",
+        dn=dn,
         disabled=disabled,
         raw={"userAccountControl": uac},
     )
@@ -189,7 +201,8 @@ def find_user(cfg: AdConfig, username: str) -> AdUser | None:
         )
         if not conn.entries:
             return None
-        return _to_user(dict(conn.entries[0]), cfg)
+        e = conn.entries[0]
+        return _to_user(e.entry_attributes_as_dict, e.entry_dn, cfg)
     except LDAPException as exc:
         raise AdError(f"AD 查询失败：{exc}") from exc
     finally:
@@ -210,8 +223,8 @@ def list_users(cfg: AdConfig, limit: int = 5000) -> list[AdUser]:
             attributes=_search_attrs(cfg),
             size_limit=limit,
         )
-        for entry in conn.entries:
-            u = _to_user(dict(entry), cfg)
+        for e in conn.entries:
+            u = _to_user(e.entry_attributes_as_dict, e.entry_dn, cfg)
             if u is not None:
                 out.append(u)
         return out
@@ -238,11 +251,11 @@ def authenticate(cfg: AdConfig, username: str, password: str) -> AdUser:
         )
         if not conn.entries:
             raise AdAuthError("用户名或密码错误")
-        entry = dict(conn.entries[0])
-        user = _to_user(entry, cfg)
+        e = conn.entries[0]
+        user = _to_user(e.entry_attributes_as_dict, e.entry_dn, cfg)
         if user is None:
             raise AdAuthError("用户名或密码错误")
-        dn = entry.get("dn")
+        dn = e.entry_dn
         if not dn:
             raise AdError("AD 条目缺少 DN")
     except LDAPException as exc:

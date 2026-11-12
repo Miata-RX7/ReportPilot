@@ -34,7 +34,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.user import User
 from app.services import ldap_client
-from app.services.ldap_client import AdConfig, AdError, AdUser
+from app.services.ldap_client import AdAuthError, AdConfig, AdError, AdUser
 
 logger = logging.getLogger(__name__)
 
@@ -209,8 +209,11 @@ async def upsert_on_login(db: AsyncSession, au: AdUser) -> tuple[User, bool]:
         return user, True
 
     if user.source != "ad":
-        # 本地账号撞名：本地优先（admin/ops），不动
-        return user, False
+        # **本地账号撞名**：本地账号（admin / ops）只能用**本地密码**登录。
+        # AD 里恰好有个同名账号（现场 AD 就有个 admin）时，
+        # 如果这里返回本地用户，AD 密码就能换来本地 admin 的权限 —— 越权。
+        # 所以：拒绝，本地账号不参与 AD 认证。
+        raise AdAuthError("该账号为本地账号，请使用本地密码登录")
 
     changed = False
     if au.display_name and user.display_name != au.display_name:
