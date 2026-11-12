@@ -6,8 +6,13 @@ WORKDIR /code
 # fonts-wqy-microhei 仅 +1.6MB（覆盖 GB2312 + 常用简中）；
 # 若实测出现生僻字豆腐块，可换 fonts-noto-cjk（+56MB 下载，解压约 200MB），
 # 见 docs/technical-reference.md「图表渲染」小节。--no-install-recommends + 清 apt 缓存控体积。
+#
+# libreoffice-writer：报告 DOCX -> PDF（确认页预览用，2026-11-12）。
+# 为什么不用 ONLYOFFICE 的 /converter：线上那个 DocumentServer 是**精简版**
+# （documentserver/core/ 是空的、没有 x2t 转换器），/converter 会返回 error -7。
+# --no-install-recommends 去掉推荐包（GUI/媒体等），只留 writer 核心。
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends fonts-wqy-microhei \
+    && apt-get install -y --no-install-recommends fonts-wqy-microhei libreoffice-writer \
     && rm -rf /var/lib/apt/lists/*
 
 ENV PYTHONDONTWRITEBYTECODE=1 \

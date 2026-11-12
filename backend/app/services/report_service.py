@@ -63,6 +63,9 @@ ALLOWED_ACTIONS: dict[str, set[str]] = {
     "generating": {"generate_ok", "generate_fail"},
     "pending_confirmation": {
             "confirm",
+            # 「仅确认不发送」（2026-11-12）：确认人线下自己处理了，
+            # 告诉系统「这轮结束」—— 消费 token、不推送、不再催办
+            "confirm_only",
             "confirm_by_admin",
             "resend_confirmation",
         },
