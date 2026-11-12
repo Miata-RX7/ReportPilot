@@ -511,6 +511,8 @@ export type ReportStatus =
   | 'generating'
   | 'pending_confirmation'
   | 'confirmed'
+  /** 「仅确认不发送」的终态（2026-11-12） */
+  | 'confirmed_no_push'
   | 'pushed'
   | 'push_failed'
   | 'failed'

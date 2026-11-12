@@ -204,14 +204,44 @@ function toggleTrace(key: string) {
 const previewOpen = ref(false)
 const previewUnavailable = ref(false)
 /** PDF 预览地址（带 token，免登录） */
+const pdfNonce = ref(0)
 const pdfUrl = computed(() =>
   preview.value
-    ? `/api/confirm/${preview.value.report_id}/preview.pdf?token=${encodeURIComponent(token.value)}`
+    ? `/api/confirm/${preview.value.report_id}/preview.pdf?token=${encodeURIComponent(token.value)}&t=${pdfNonce.value}`
     : '',
 )
 
 function togglePreview() {
   previewOpen.value = !previewOpen.value
+  if (previewOpen.value) {
+    // PDF 是**后台**转的（报告生成完才转，几十秒）—— 确认人可能比转换更早打开链接。
+    // 加载失败时自动重试几次，避免「预览不可用」其实是「还没转好」。
+    schedulePdfRetry()
+  }
+}
+
+/** PDF 还没转好时的自动重试（最多 5 次，间隔 6 秒） */
+let pdfRetryTimer: number | null = null
+let pdfRetryCount = 0
+/** PDF 加载失败（可能还没转好）-> 提示并安排重试 */
+function onPdfError() {
+  previewUnavailable.value = true
+  schedulePdfRetry()
+}
+
+function schedulePdfRetry() {
+  if (pdfRetryTimer !== null) {
+    window.clearTimeout(pdfRetryTimer)
+    pdfRetryTimer = null
+  }
+  if (pdfRetryCount >= 5) return
+  pdfRetryTimer = window.setTimeout(() => {
+    pdfRetryTimer = null
+    pdfRetryCount += 1
+    // 换个查询参数强制 iframe 重新拉
+    pdfNonce.value = Date.now()
+    schedulePdfRetry()
+  }, 6000)
 }
 
 /** 下载 Word 版：先上报「下载过」再触发下载 */
@@ -428,14 +458,14 @@ onMounted(load)
             </div>
           </div>
           <p v-if="previewUnavailable" class="text-muted report-preview__hint">
-            预览不可用（PDF 未生成），请下载 Word 版查看。
+            预览正在生成中（报告转 PDF 需要几十秒），稍后会自动重试；也可以直接下载 Word 版查看。
           </p>
           <div v-if="previewOpen" class="report-preview__frame">
             <iframe
-              v-if="!previewUnavailable"
               :src="pdfUrl"
               title="报告预览"
               data-testid="report-pdf-frame"
+              @error="onPdfError"
             />
           </div>
         </div>

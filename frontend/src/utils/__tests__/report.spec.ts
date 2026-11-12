@@ -21,11 +21,13 @@ describe('reportName', () => {
   })
 })
 
-describe('状态机（7 态）', () => {
+describe('状态机（8 态）', () => {
   it('状态标签齐全且无旧状态', () => {
     expect(Object.keys(STATUS_LABEL).sort()).toEqual(
       [
         'confirmed',
+        // 「仅确认不发送」的终态（2026-11-12）
+        'confirmed_no_push',
         'failed',
         'generating',
         'pending',

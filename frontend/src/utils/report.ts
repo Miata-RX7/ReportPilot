@@ -14,6 +14,8 @@ export const STATUS_LABEL: Record<ReportStatus, string> = {
   generating: '生成中',
   pending_confirmation: '待确认',
   confirmed: '已确认',
+  /** 「仅确认不发送」的终态（2026-11-12） */
+  confirmed_no_push: '已确认（未发送）',
   pushed: '已推送',
   push_failed: '推送失败',
   failed: '生成失败',
@@ -29,6 +31,9 @@ export function statusSoftClass(status: ReportStatus): string {
     case 'generating':
     case 'confirmed':
       return 'info'
+    case 'confirmed_no_push':
+      // 终态但不是「已推送」-> 用 neutral 灰，别用 success 绿（会误导成发出去了）
+      return 'neutral'
     case 'pending_confirmation':
       return 'warning'
     case 'pushed':
@@ -65,6 +70,11 @@ export function statusActions(status: ReportStatus): ReportAction[] {
       return ['confirmByAdmin', 'resendConfirmation', 'download']
     case 'confirmed':
       return ['retryPush', 'download']
+    case 'confirmed_no_push':
+      // 「仅确认不发送」的终态（2026-11-12）：不再发送、不再催办，
+      // 只能下载报告。**不提供重发/重推** —— 用户明确要求不可撤销，
+      // 有问题重新手动触发。
+      return ['download']
     case 'pushed':
       return ['download']
     case 'push_failed':
