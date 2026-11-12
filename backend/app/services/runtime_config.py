@@ -36,11 +36,25 @@ EDITABLE_KEYS: frozenset[str] = frozenset(
         # AI 系统提示词两段（非密钥，明文存 app_settings；空串 = 回落内置常量）
         "ai_system_prompt",
         "ai_system_rules",
+        # AD / LDAP 对接（2026-11-12）
+        "ad_server",
+        "ad_bind_dn",
+        "ad_bind_password",
+        "ad_base_dn",
+        "ad_user_filter",
+        "ad_map_username",
+        "ad_map_display_name",
+        "ad_map_email",
+        "ad_sync_enabled",
+        "ad_sync_interval_minutes",
+        "ad_timeout_seconds",
     }
 )
 
 # 密钥类：落库前加密，接口永不返回
-SECRET_KEYS: frozenset[str] = frozenset({"smtp_password", "ai_api_key"})
+SECRET_KEYS: frozenset[str] = frozenset(
+    {"smtp_password", "ai_api_key", "ad_bind_password"}
+)
 
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
 

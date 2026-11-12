@@ -91,6 +91,35 @@ class Settings(BaseSettings):
     # 确认链接过期后，邮件里提示联系谁重新发送
     task_contact_email: str = ""
 
+    # ------------------------------------------------------------------
+    # AD / LDAP 对接（2026-11-12）
+    #
+    # admin / ops 走本地登录，其余用户走 AD。
+    # 下面的默认值就是现场 AD 的参数，可在「系统设置 → 运行时配置」里改。
+    # ------------------------------------------------------------------
+    #: AD 服务器地址（明文 LDAP）
+    ad_server: str = "ldap://ldap.livecom.ltd:389"
+    #: 绑定用的服务账号（用于搜索用户 DN）
+    ad_bind_dn: str = "read_conn@livecom.hk"
+    #: 服务账号密码（**密文存 app_settings**，接口永不返回）
+    ad_bind_password: str = ""
+    #: 搜索用户的根 DN
+    ad_base_dn: str = "dc=livecom,dc=hk"
+    #: 拉取用户列表的 LDAP 过滤器
+    ad_user_filter: str = "(objectClass=user)"
+    #: 字段映射：登录名
+    ad_map_username: str = "sAMAccountName"
+    #: 字段映射：显示名
+    ad_map_display_name: str = "displayName"
+    #: 字段映射：邮箱
+    ad_map_email: str = "mail"
+    #: 是否启用自动同步
+    ad_sync_enabled: bool = True
+    #: 自动同步间隔（分钟）
+    ad_sync_interval_minutes: int = 30
+    #: AD 连接 / 查询超时（秒）
+    ad_timeout_seconds: int = 15
+
     @property
     def onlyoffice_enabled(self) -> bool:
         """三项配置齐全才启用在线编辑，否则前端降级为只读预览。"""

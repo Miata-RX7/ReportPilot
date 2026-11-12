@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import (
+    ad_settings,
     ai_calls,
     auth,
     confirmations,
@@ -106,6 +107,7 @@ def create_app() -> FastAPI:
     app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
     app.include_router(users.router, prefix="/api/users", tags=["users"])
     app.include_router(system.router, prefix="/api/system", tags=["system"])
+    app.include_router(ad_settings.router, prefix="/api/system", tags=["system-ad"])
 
     @app.get("/api/health")
     async def health() -> dict[str, str]:

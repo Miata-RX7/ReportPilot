@@ -16,6 +16,7 @@ from typing import Any
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 from sqlalchemy import text
 
 from app.config import get_settings
@@ -39,6 +40,7 @@ LOCK_NAMESPACE = 0x5245  # "RE"
 # 系统级 job id
 JOB_REMINDER = "system:reminder"
 JOB_PUSH_COMPENSATION = "system:push-compensation"
+JOB_AD_SYNC = "system:ad-sync"
 
 
 def get_scheduler() -> AsyncIOScheduler | None:
@@ -102,7 +104,15 @@ async def start_scheduler() -> None:
         id=JOB_PUSH_COMPENSATION,
         replace_existing=True,
     )
-    logger.info("已加载 %d 个启用任务 + 2 个系统任务", len(tasks))
+    # AD 用户同步：**每 5 分钟醒一次**，内部判断「距上次同步是否已到间隔」。
+    # 这样在系统设置里改 ad_sync_interval_minutes **立即生效**，不用重启调度器。
+    _scheduler.add_job(
+        _job_ad_sync,
+        trigger=IntervalTrigger(minutes=5),
+        id=JOB_AD_SYNC,
+        replace_existing=True,
+    )
+    logger.info("已加载 %d 个启用任务 + 3 个系统任务", len(tasks))
 
 
 async def stop_scheduler() -> None:
@@ -159,6 +169,59 @@ def _job_reminders() -> None:
         asyncio.run(sweep_reminders())
     except Exception as exc:
         logger.exception("提醒 sweep 异常: %s", exc)
+
+
+#: AD 同步：上次真正同步的时间（monotonic 秒）。进程内状态即可 ——
+#: 调度器本身就是单副本开启的（scheduler_enabled）。
+_last_ad_sync_at: float | None = None
+
+
+def _job_ad_sync() -> None:
+    """AD 用户同步（周期由 ad_sync_interval_minutes 决定）。
+
+    job 本身每 5 分钟醒一次，内部判断「距上次同步是否已到间隔」——
+    这样在系统设置里改间隔**立即生效**，不用重启调度器。
+    """
+    import time
+
+    from app.database import AsyncSessionLocal
+    from app.services import ad_sync, runtime_config
+
+    try:
+        settings = runtime_config.effective_settings()
+    except Exception:
+        logger.exception("AD 同步：读取运行时配置失败")
+        return
+    if not getattr(settings, "ad_sync_enabled", False):
+        return
+    interval = max(1, int(getattr(settings, "ad_sync_interval_minutes", 30) or 30))
+    now = time.monotonic()
+    global _last_ad_sync_at
+    if _last_ad_sync_at is not None and (now - _last_ad_sync_at) < interval * 60:
+        return
+    _last_ad_sync_at = now
+
+    cfg = ad_sync.config_from_settings(settings)
+    if not cfg.configured:
+        logger.info("AD 同步跳过：配置不完整")
+        return
+
+    async def _run() -> None:
+        async with AsyncSessionLocal() as db:
+            result = await ad_sync.sync_users(db, cfg)
+        logger.info(
+            "AD 同步：新建 %d 更新 %d 停用 %d 启用 %d 消失 %d",
+            result.created,
+            result.updated,
+            result.disabled,
+            result.reactivated,
+            result.vanished,
+        )
+
+    try:
+        asyncio.run(_run())
+    except Exception:
+        logger.exception("AD 同步失败")
 
 
 def _job_push_compensation() -> None:
