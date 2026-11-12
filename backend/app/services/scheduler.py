@@ -180,7 +180,7 @@ async def run_task_instance(
       短事务认领（advisory lock + 唯一索引）-> pending -> generating
       -> 复用生成核心 -> 成功发确认邮件 / 失败置 failed
     """
-    from app.services import report_service
+    from app.services import background, report_service
 
     async with AsyncSessionLocal() as db:
         task = await db.get(ReportTask, task_id)
@@ -245,8 +245,14 @@ async def run_task_instance(
 
     logger.info("实例已创建 report=%d task=%d source=%s", report_id, task_id, source)
 
-    # ---- 执行生成（长事务之外）----
-    await report_service.run_generation(report_id, actor_id=None)
+    # ---- 执行生成（**后台**，不阻塞请求）----
+    # 之前是 `await report_service.run_generation(...)` —— 请求会一直等到整份
+    # 报告生成完（渲染 + 取数 + AI + 转 PDF），前端 30 秒必然超时。
+    # 前端本来就按「立即返回」设计（提示「已触发，正在生成报告（实例 #id）」）。
+    background.spawn(
+        report_service.run_generation(report_id, actor_id=None),
+        name=f"run_generation:{report_id}",
+    )
     return report_id
 
 

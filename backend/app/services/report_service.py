@@ -29,7 +29,7 @@ from app.models.report import PushRecord, Report, ReportAudit, ReportSummary
 from app.models.template import TemplateBinding, TemplateVersion, WordTemplate
 from app.models.user import User
 from app.schemas.metric import MetricFact
-from app.services import ai_insight, ai_trace, template_service
+from app.services import ai_insight, ai_trace, background, template_service
 from app.services.ai_insight import InsightConfig
 from app.services.docx_renderer import RenderError, open_template, render_docx
 from app.services.mailer import (
@@ -371,11 +371,10 @@ async def run_generation(report_id: int, *, actor_id: int | None = None) -> str 
             await _mark_generation_failed(report_id, exc, actor_id)
             return None
 
-    # 报告正文转 PDF（确认页预览）。失败不影响报告生成 —— 只是少了预览。
-    try:
-        await convert_report_pdf(report_id)
-    except Exception:
-        logger.exception("PDF 转换异常（不影响报告）report_id=%d", report_id)
+    # 报告正文转 PDF（确认页预览）—— **后台**跑。
+    # 不能 await：转换要几十秒，await 会拖慢报告完成与确认邮件的发出。
+    # 失败不影响报告生成 —— 只是确认页少了预览（那边有降级提示）。
+    background.spawn(convert_report_pdf(report_id), name=f"pdf:{report_id}")
 
     # 邮件在事务外发送：SMTP 失败不影响实例状态（用户可"重新发送"）
     if raw_token:
