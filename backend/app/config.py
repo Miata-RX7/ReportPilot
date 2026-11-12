@@ -105,8 +105,10 @@ class Settings(BaseSettings):
     ad_bind_password: str = ""
     #: 搜索用户的根 DN
     ad_base_dn: str = "dc=livecom,dc=hk"
-    #: 拉取用户列表的 LDAP 过滤器
-    ad_user_filter: str = "(objectClass=user)"
+    #: 拉取用户列表的 LDAP 过滤器。
+    #: sAMAccountType=805306368 = NORMAL_ACCOUNT（真人），
+    #: 排除机器账号（805306369，如 HK-DC01$）—— 它们也是 objectClass=user。
+    ad_user_filter: str = "(&(objectClass=user)(sAMAccountType=805306368))"
     #: 字段映射：登录名
     ad_map_username: str = "sAMAccountName"
     #: 字段映射：显示名

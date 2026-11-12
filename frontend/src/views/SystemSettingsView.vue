@@ -725,7 +725,7 @@ onMounted(() => {
             <el-input v-model="adForm.base_dn" placeholder="dc=livecom,dc=hk" />
           </el-form-item>
           <el-form-item label="用户过滤器">
-            <el-input v-model="adForm.user_filter" placeholder="(objectClass=user)" />
+            <el-input v-model="adForm.user_filter" placeholder="(&(objectClass=user)(sAMAccountType=805306368))" />
           </el-form-item>
 
           <div class="ad-form__section">字段映射</div>

@@ -31,7 +31,7 @@ class AdSettingsRead(BaseModel):
     #: 服务账号密码是否已配置（接口永不返回密码本身）
     bind_password_set: bool = False
     base_dn: str = ""
-    user_filter: str = "(objectClass=user)"
+    user_filter: str = "(&(objectClass=user)(sAMAccountType=805306368))"
     map_username: str = "sAMAccountName"
     map_display_name: str = "displayName"
     map_email: str = "mail"
@@ -49,7 +49,7 @@ class AdSettingsUpdate(BaseModel):
     bind_dn: str = ""
     bind_password: str | None = None
     base_dn: str = ""
-    user_filter: str = "(objectClass=user)"
+    user_filter: str = "(&(objectClass=user)(sAMAccountType=805306368))"
     map_username: str = "sAMAccountName"
     map_display_name: str = "displayName"
     map_email: str = "mail"
