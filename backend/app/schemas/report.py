@@ -156,6 +156,8 @@ class ConfirmPreview(BaseModel):
     abnormal_count: int = 0
     #: 模板里声明的「总结_」占位（不含大括号），确认人据此选择把总结填到哪一处
     summary_placeholders: list[str] = Field(default_factory=list)
+    #: 确认人下载过 Word 版的时间（有值 -> 确认页提醒他点「仅确认不发送」）
+    docx_downloaded_at: datetime | None = None
     #: {占位名: 显示名}，给确认页用（如 {"summary_assets_info": "资产信息"}）
     summary_placeholder_labels: dict[str, str] = Field(default_factory=dict)
     # token 校验结果：valid / invalid / used / expired
@@ -175,7 +177,8 @@ class ConfirmResult(BaseModel):
 
     report_id: int
     confirmed: bool
-    push_status: Literal["pushed", "push_failed"]
+    #: not_pushed = 「仅确认不发送」（确认人线下自己处理了，系统未发送）
+    push_status: Literal["pushed", "push_failed", "not_pushed"]
     push_error: str | None = None
     message: str
 

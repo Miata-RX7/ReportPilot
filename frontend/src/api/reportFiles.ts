@@ -63,6 +63,10 @@ export const reportFileApi = {
     if (placeholder) fd.append('placeholder', placeholder)
     return http.post<ReportFile>(`/report-files/${reportId}/files`, fd)
   },
+  /** 上报「确认人下载过 Word 版」—— 用于提醒他点「仅确认不发送」 */
+  markDownloaded(reportId: number, token: string) {
+    return http.post(`/confirm/${reportId}/downloaded`, null, { params: { token } })
+  },
   summarize(
     reportId: number,
     fileId: number,

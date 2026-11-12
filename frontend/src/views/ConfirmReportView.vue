@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 
 import { confirmApi } from '@/api/reportTasks'
 import type { ConfirmPreview, ConfirmResult } from '@/api/types'
@@ -199,6 +199,86 @@ function toggleTrace(key: string) {
   traceRows.value[key] = cat.rows.map((no) => ({ no, text: `第 ${no} 行` }))
   traceOpenFor.value = key
 }
+/* ---- 报告预览 / 下载 ---- */
+
+const previewOpen = ref(false)
+const previewUnavailable = ref(false)
+/** PDF 预览地址（带 token，免登录） */
+const pdfUrl = computed(() =>
+  preview.value
+    ? `/api/confirm/${preview.value.report_id}/preview.pdf?token=${encodeURIComponent(token.value)}`
+    : '',
+)
+
+function togglePreview() {
+  previewOpen.value = !previewOpen.value
+}
+
+/** 下载 Word 版：先上报「下载过」再触发下载 */
+async function onDownloadDocx() {
+  const rid = preview.value?.report_id
+  if (!rid) return
+  try {
+    await reportFileApi.markDownloaded(rid, token.value)
+    ElMessage.warning(
+      '您已下载报告。若已在线下修改并发送，请点击「仅确认不发送」结束本轮任务。',
+    )
+  } catch {
+    // 上报失败不影响下载
+  }
+  const url = `/api/confirm/${rid}/download.docx?token=${encodeURIComponent(token.value)}`
+  const a = document.createElement('a')
+  a.href = url
+  a.download = ''
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+}
+
+/** 仅确认不发送：结束本轮任务（不推送） */
+const confirmingOnly = ref(false)
+async function onConfirmOnly() {
+  try {
+    await ElMessageBox.confirm(
+      '确认后本轮报告自动化任务将结束，系统不会再发送本报告，也不会再发送催办提醒。如果您已经线下修改并发送了报告，请点击此按钮。',
+      '仅确认不发送',
+      { type: 'warning', confirmButtonText: '结束本轮任务', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
+  confirmingOnly.value = true
+  try {
+    const { data } = await confirmApi.confirmOnly(reportId.value, token.value, buildSummaries())
+    ElMessage.success(data.message)
+    await load()
+  } catch (error) {
+    ElMessage.error(parseApiError(error).message)
+  } finally {
+    confirmingOnly.value = false
+  }
+}
+
+/** 组装要提交的总结快照（空的不提交） */
+function buildSummaries() {
+  return summaryPlaceholders.value
+    .map((ph) => {
+      const f = fileOf(ph)
+      const d = draftOf(ph)
+      const text = d?.text.trim() ?? ''
+      if (!f || !text) return null
+      return {
+        file_id: f.id,
+        placeholder: ph,
+        prompt: d?.prompt ?? '',
+        text,
+        categories: d?.categories ?? [],
+        verification: d?.verification ?? { categories: 0, numbers: 0, verified: true, issues: [] },
+      }
+    })
+    .filter((x) => x !== null)
+}
+
 async function onConfirm() {
   confirming.value = true
   try {
@@ -334,13 +414,46 @@ onMounted(load)
           </div>
         </div>
 
+        <!-- 报告预览（PDF）+ Word 下载 -->
+        <div class="report-preview">
+          <div class="report-preview__head">
+            <span class="report-preview__title">报告预览</span>
+            <div class="report-preview__actions">
+              <el-button size="small" @click="togglePreview">
+                {{ previewOpen ? '收起预览' : '展开预览' }}
+              </el-button>
+              <el-button size="small" data-testid="download-docx" @click="onDownloadDocx">
+                下载 Word 版
+              </el-button>
+            </div>
+          </div>
+          <p v-if="previewUnavailable" class="text-muted report-preview__hint">
+            预览不可用（PDF 未生成），请下载 Word 版查看。
+          </p>
+          <div v-if="previewOpen" class="report-preview__frame">
+            <iframe
+              v-if="!previewUnavailable"
+              :src="pdfUrl"
+              title="报告预览"
+              data-testid="report-pdf-frame"
+            />
+          </div>
+        </div>
+
+        <!-- 下载提醒：下载过 Word 版 -> 提示可以「仅确认不发送」 -->
         <el-alert
-          type="info"
+          v-if="preview?.docx_downloaded_at"
+          type="warning"
           show-icon
           :closable="false"
-          class="privacy-hint"
-          title="为避免运营数据外泄，此页不展示具体指标数值"
-        />
+          class="download-hint"
+          data-testid="download-hint"
+        >
+          <template #title>
+            您已下载过本报告。若您已在线下修改并发送，请点击下方
+            <strong>「仅确认不发送」</strong> 结束本轮报告自动化任务。
+          </template>
+        </el-alert>
 
         <div class="confirm-actions">
           <!-- 上传的本期数据文件 + AI 生成的总结（2026-11-03） -->
@@ -449,6 +562,7 @@ onMounted(load)
   </div>
 </div>
 
+      <div class="confirm-actions__buttons">
       <el-button
             type="primary"
             size="large"
@@ -458,6 +572,14 @@ onMounted(load)
           >
             确认并发送给收件人
           </el-button>
+          <el-button
+            data-testid="confirm-only"
+            :loading="confirmingOnly"
+            @click="onConfirmOnly"
+          >
+            仅确认不发送
+          </el-button>
+      </div>
         </div>
       </template>
     </div>
@@ -465,6 +587,57 @@ onMounted(load)
 </template>
 
 <style scoped lang="scss">
+/* ---- 报告预览 ---- */
+.report-preview {
+  margin-top: var(--space-4, 16px);
+  border: 1px solid var(--color-border-light, #e2e8f0);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.report-preview__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  background: var(--color-bg-soft, #f8fafc);
+}
+.report-preview__title {
+  font-weight: 600;
+}
+.report-preview__actions {
+  display: flex;
+  gap: 8px;
+}
+.report-preview__hint {
+  margin: 0;
+  padding: 10px 14px;
+}
+.report-preview__frame {
+  height: 72vh;
+  min-height: 520px;
+  background: #f1f5f9;
+}
+.report-preview__frame iframe {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  display: block;
+}
+
+/* 下载提醒 */
+.download-hint {
+  margin-top: var(--space-3, 12px);
+}
+
+/* 按钮组：与上方内容留出间距（之前按钮贴着最后一张卡片） */
+.confirm-actions__buttons {
+  margin-top: var(--space-5, 20px);
+  display: flex;
+  justify-content: center;
+  gap: var(--space-3, 12px);
+  flex-wrap: wrap;
+}
 .confirm-page {
   min-height: 100vh;
   display: flex;
