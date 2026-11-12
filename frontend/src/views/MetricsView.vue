@@ -1928,7 +1928,7 @@ onMounted(load)
           :model-ids="form.model_ids"
           :instance-ids="form.instance_ids"
           :picks="aiopsPicks"
-          :metric-type="form.metric_type === 'calculated' ? 'scalar' : form.metric_type"
+          :metric-type="form.metric_type"
           @update:model-ids="form.model_ids = $event"
           @update:instance-ids="form.instance_ids = $event"
           @update:picks="aiopsPicks = $event"
