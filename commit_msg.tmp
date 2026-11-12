@@ -1,0 +1,28 @@
+feat(metric): 计算型指标（多指标四则运算 + 括号）
+
+平台原先无法做指标间运算：MetricType 只有 scalar/curve/pie/text/time，
+CalcFormula 只有 agg/compare/baseline_lookback，transform 的 mul 右操作数是
+常量（乘不上随周期变化的分钟数）。
+
+新增 metric_type=calculated：由若干**基础 scalar 指标**经 + - * / 和括号得出一个数值。
+
+- 算式只允许数字/变量/四则/括号（app/services/expr_eval.py，**ast 白名单**，
+  不用 eval —— eval 能执行任意代码，且 `**` 会 DoS）
+- 内置变量 `minutes` = 所选周期的总分钟数（period_utils.period_minutes：
+  月按**日历月实际天数** 10月44640/9月43200/2月40320；周 10080）。
+  环比同比天然正确 —— 基线周期重算时 minutes 也跟着变
+- 变量只能引用**基础 scalar**、不允许嵌套计算型/曲线/饼图/文本、
+  必须与计算型指标**同数据源**（calc_engine 无状态，adapter 由调用方按
+  data_source_id 传入）-> 天然无循环引用
+- 结果的单位用「数值变换」人工换算（transform mul/add），与其它指标语义一致
+- 保存时校验（app/services/calculated_metrics.py）：算式语法、变量定义、
+  引用类型、数据源一致
+
+生产实测（引用「蒙古国航办公室-线路可用率」id=50，公式 (100-a)/100*minutes）：
+  2026-10 -> 9.5 分钟（可用率 99.9787%，44640 分钟）
+  2026-09 -> 0.5 分钟（可用率 99.9988%，43200 分钟）
+  2026-02 -> 0.0 分钟（可用率 100%，40320 分钟）
+
+迁移 0025 放开 DB 的 ck_metric_type 检查约束（原来只允许 5 种类型）。
+
+后端 883 passed / 前端 239 passed + typecheck + build 全绿。
