@@ -500,6 +500,25 @@ class _MetricCommon(BaseModel):
         return self
 
 
+class CalculatedTypeConfig(BaseModel):
+    """计算型指标的「数值变换」——结果的单位人工换算（mul / add）。
+
+    与其它指标的 type_config.transform 语义完全一致：
+        最终值 = 算式结果 × mul + add
+    """
+
+    transform: Transform = Field(default_factory=Transform)
+
+
+class CalculatedVariable(BaseModel):
+    """计算型指标公式里的一个变量。"""
+
+    #: 公式里使用的名字（ASCII 标识符）
+    name: str = Field(min_length=1, max_length=32, pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
+    #: 引用的**基础 scalar 指标** id（不允许引用计算型/曲线/饼图/文本）
+    metric_id: int
+
+
 class CalculatedQueryConfig(BaseModel):
     """计算型指标：算式 + 变量定义。
 
@@ -520,25 +539,6 @@ class CalculatedQueryConfig(BaseModel):
         if dup:
             raise ValueError(f"变量名重复：{', '.join(sorted(dup))}")
         return self
-
-
-class CalculatedVariable(BaseModel):
-    """计算型指标公式里的一个变量。"""
-
-    #: 公式里使用的名字（ASCII 标识符）
-    name: str = Field(min_length=1, max_length=32, pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
-    #: 引用的**基础 scalar 指标** id（不允许引用计算型/曲线/饼图/文本）
-    metric_id: int
-
-
-class CalculatedTypeConfig(BaseModel):
-    """计算型指标的「数值变换」——结果的单位人工换算（mul / add）。
-
-    与其它指标的 type_config.transform 语义完全一致：
-        最终值 = 算式结果 × mul + add
-    """
-
-    transform: Transform = Field(default_factory=Transform)
 
 
 class ScalarMetricCreate(_MetricCommon):

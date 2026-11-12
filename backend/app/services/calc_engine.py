@@ -759,7 +759,19 @@ async def _compute_calculated(
         name=metric_def.name,
         value=value,
         value_shape="scalar",
-        formula=f"{formula} = {raw}",
+        baseline_value=None,
+        change_pct=None,
+        unit=metric_def.unit,
+        source=source_name,
+        object=(
+            "计算型指标（引用："
+            + "、".join(
+                f"{v.get('name')}={v.get('metric_id')}" for v in variables
+            )
+            + "）"
+        ),
+        formula=f"{formula} = {raw}" + (f"（×{mul} +{add}）" if (mul != 1.0 or add != 0.0) else ""),
+        period=period,
     )
 
 
