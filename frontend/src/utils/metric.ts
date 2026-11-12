@@ -38,7 +38,14 @@ export function metricTypeClass(
 }
 
 /** 当前开放的指标类型（time 不取数，仅用当前时间 + 偏移 + 自定义格式） */
-export const TYPE_ENABLED: MetricType[] = ['scalar', 'curve', 'pie', 'text', 'time']
+export const TYPE_ENABLED: MetricType[] = [
+  'scalar',
+  'curve',
+  'pie',
+  'text',
+  'time',
+  'calculated',
+]
 
 /**
  * 取数范围摘要（按指标类型分型）：

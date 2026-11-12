@@ -1916,7 +1916,8 @@ onMounted(load)
           </div>
         </el-form-item>
 
-        <template v-if="form.metric_type !== 'time'">
+        <!-- 取数配置：时间类型与计算型都不直接取数 -->
+        <template v-if="form.metric_type !== 'time' && form.metric_type !== 'calculated'">
         <div class="form-section">取数配置</div>
 
         <!-- AIOps：独立级联（模型 → 实例 → 监控项 → 列 → 主键行） -->
