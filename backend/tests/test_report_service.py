@@ -72,6 +72,8 @@ class TestStateMachineTable:
         assert ALLOWED_ACTIONS["generating"] == {"generate_ok", "generate_fail"}
         assert ALLOWED_ACTIONS["pending_confirmation"] == {
             "confirm",
+            # 「仅确认不发送」（2026-11-12）
+            "confirm_only",
             "confirm_by_admin",
             "resend_confirmation",
         }
