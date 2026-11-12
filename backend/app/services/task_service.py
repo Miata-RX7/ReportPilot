@@ -206,6 +206,12 @@ async def create_task(
         recipient_emails=recipients,
         is_active=is_active,
         created_by=actor_id,
+        # **统计周期规则必须落库** —— 之前 validate_period_rule 的返回值被丢弃了，
+        # 新建任务一律存成模型默认值 (month, 0) = 「本期（按触发时间）」，
+        # 用户在表单里选的「上月 / 上周」全部丢失（update_task 那边是对的，
+        # 所以只有新建会丢 —— 2026-11-12 线上反馈）
+        period_granularity=granularity,
+        period_offset=offset,
     )
     db.add(task)
     await db.commit()
