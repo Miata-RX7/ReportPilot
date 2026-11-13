@@ -16,6 +16,7 @@ from app.services import calculated_metrics, ownership
 from app.database import get_db
 from app.models.datasource import DataSource
 from app.models.metric import MetricDefinition
+from app.models.template import TemplateVersion, WordTemplate
 from app.models.user import User
 from app.schemas.metric import (
     ComputeRequest,
@@ -534,7 +535,7 @@ async def delete_metric(
     # 不解绑的话，模板里会留下指向已停用指标的绑定 -> 报告生成时直接失败
     # （「变量 xxx 绑定的指标不存在或已停用」），而且用户在绑定页根本没法
     # 重新给这个变量选指标（已删除的指标不该出现在候选里）。
-    from app.models.template import TemplateBinding, WordTemplate
+    from app.models.template import TemplateBinding
 
     bound_rows = (
         await db.scalars(
@@ -563,16 +564,22 @@ async def delete_metric(
 async def _template_names_of_bindings(
     db: AsyncSession, bindings: list[Any]
 ) -> list[str]:
-    """绑定涉及的模板名（去重）—— 写日志用。"""
-    tpl_ids = {b.template_id for b in bindings}
-    if not tpl_ids:
+    """绑定涉及的模板名（去重）—— 写日志用。
+
+    注意：``template_bindings`` 挂的是 **version_id**，没有 template_id，
+    要经 ``template_versions`` 才能拿到模板。
+    """
+    version_ids = {b.version_id for b in bindings}
+    if not version_ids:
         return []
     rows = (
-        await db.scalars(
-            select(WordTemplate.name).where(WordTemplate.id.in_(tpl_ids))
+        await db.execute(
+            select(WordTemplate.name)
+            .join(TemplateVersion, TemplateVersion.template_id == WordTemplate.id)
+            .where(TemplateVersion.id.in_(version_ids))
         )
-    ).all()
-    return sorted(rows)
+    ).scalars().all()
+    return sorted(set(rows))
 
 
 @router.get("/{metric_id}/template-bindings")
@@ -584,12 +591,17 @@ async def list_metric_template_bindings(
     """该指标被哪些模板的哪些变量绑定（删除前给用户看清楚要解绑什么）。"""
     metric = await _get_or_404(db, metric_id)
     ownership.ensure_metric_visible(metric, current_user)
-    from app.models.template import TemplateBinding, WordTemplate
+    from app.models.template import TemplateBinding
 
+    # template_bindings 挂的是 version_id -> 要经 template_versions 关联模板
     rows = (
         await db.execute(
             select(TemplateBinding, WordTemplate)
-            .join(WordTemplate, TemplateBinding.template_id == WordTemplate.id)
+            .join(
+                TemplateVersion,
+                TemplateVersion.id == TemplateBinding.version_id,
+            )
+            .join(WordTemplate, WordTemplate.id == TemplateVersion.template_id)
             .where(
                 TemplateBinding.binding_type == "metric",
                 TemplateBinding.binding_ref_id == metric_id,
