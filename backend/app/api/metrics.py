@@ -529,10 +529,83 @@ async def delete_metric(
     # 看得见但不是自己的才返回 403。
     ownership.ensure_metric_visible(metric, current_user)
     ownership.ensure_metric_editable(metric, current_user)
+
+    # **删除指标要连带解绑模板**（2026-11-13）。
+    # 不解绑的话，模板里会留下指向已停用指标的绑定 -> 报告生成时直接失败
+    # （「变量 xxx 绑定的指标不存在或已停用」），而且用户在绑定页根本没法
+    # 重新给这个变量选指标（已删除的指标不该出现在候选里）。
+    from app.models.template import TemplateBinding, WordTemplate
+
+    bound_rows = (
+        await db.scalars(
+            select(TemplateBinding).where(
+                TemplateBinding.binding_type == "metric",
+                TemplateBinding.binding_ref_id == metric_id,
+            )
+        )
+    ).all()
+    for b in bound_rows:
+        await db.delete(b)
+    if bound_rows:
+        tpl_names = await _template_names_of_bindings(db, bound_rows)
+        logger.info(
+            "指标删除 -> 解除模板绑定 metric_id=%d 绑定数=%d 涉及模板=%s",
+            metric_id,
+            len(bound_rows),
+            tpl_names,
+        )
+
     metric.is_active = False  # 软删除
     await db.commit()
-    logger.info("指标已软删除 id=%d", metric.id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+async def _template_names_of_bindings(
+    db: AsyncSession, bindings: list[Any]
+) -> list[str]:
+    """绑定涉及的模板名（去重）—— 写日志用。"""
+    tpl_ids = {b.template_id for b in bindings}
+    if not tpl_ids:
+        return []
+    rows = (
+        await db.scalars(
+            select(WordTemplate.name).where(WordTemplate.id.in_(tpl_ids))
+        )
+    ).all()
+    return sorted(rows)
+
+
+@router.get("/{metric_id}/template-bindings")
+async def list_metric_template_bindings(
+    metric_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[dict[str, Any]]:
+    """该指标被哪些模板的哪些变量绑定（删除前给用户看清楚要解绑什么）。"""
+    metric = await _get_or_404(db, metric_id)
+    ownership.ensure_metric_visible(metric, current_user)
+    from app.models.template import TemplateBinding, WordTemplate
+
+    rows = (
+        await db.execute(
+            select(TemplateBinding, WordTemplate)
+            .join(WordTemplate, TemplateBinding.template_id == WordTemplate.id)
+            .where(
+                TemplateBinding.binding_type == "metric",
+                TemplateBinding.binding_ref_id == metric_id,
+            )
+            .order_by(WordTemplate.id)
+        )
+    ).all()
+    return [
+        {
+            "template_id": tpl.id,
+            "template_name": tpl.name,
+            "placeholder": b.placeholder,
+            "version_id": b.version_id,
+        }
+        for b, tpl in rows
+    ]
 
 
 @router.post("/{metric_id}/compute", response_model=MetricFact)

@@ -134,12 +134,17 @@ const grantsRow = ref<TemplateListItem | null>(null)
 
 /** 下拉选项文案：图表类型标注类型，并对不可绑定的目标给出原因 */
 function metricOptionLabel(
-  m: { name: string; metric_type?: string },
+  m: { name: string; metric_type?: string; is_active?: boolean },
   alone: boolean,
 ): string {
   const typeText = { curve: '曲线图', pie: '饼图', scalar: '数值', text: '文本' }[
     m.metric_type ?? 'scalar'
   ] ?? m.metric_type
+  // 已删除（软停用）的指标**只展示、不可选** —— 用户仍能看到「这个变量绑的是
+  // 哪个（已删的）指标」，但不能把它选给别的变量。
+  if (m.is_active === false) {
+    return `${m.name}（${typeText}·已删除，不可选）`
+  }
   if (!canBindChartMetric(m.metric_type, alone)) {
     return `${m.name}（${typeText}·需独占段落，此处不可绑定）`
   }
@@ -746,7 +751,7 @@ async function onBatchDelete(): Promise<void> {
                 :key="m.id"
                 :label="metricOptionLabel(m, row.alone)"
                 :value="m.id"
-                :disabled="!canBindChartMetric(m.metric_type, row.alone)"
+                :disabled="!m.is_active || !canBindChartMetric(m.metric_type, row.alone)"
               />
             </el-select>
             <template v-else>
