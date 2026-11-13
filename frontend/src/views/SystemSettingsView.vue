@@ -748,14 +748,6 @@ onMounted(() => {
               </div>
             </div>
           </template>
-          <el-alert
-            v-else-if="adLoadFailed"
-            type="error"
-            show-icon
-            :closable="false"
-            title="AD 配置读取失败"
-            description="请检查后端服务与 AD 对接接口是否正常。"
-          />
           <el-descriptions :column="2" size="small" border v-if="adSettings">
             <el-descriptions-item label="服务器">{{ adSettings.server || '—' }}</el-descriptions-item>
             <el-descriptions-item label="绑定账号">{{ adSettings.bind_dn || '—' }}</el-descriptions-item>
