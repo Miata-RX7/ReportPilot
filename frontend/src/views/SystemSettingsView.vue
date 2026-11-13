@@ -27,7 +27,9 @@ import { parseApiError } from '@/utils/error'
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
 const auth = useAuthStore()
-const tab = ref('push')
+// 普通用户只有「用户」一个 tab（运行时配置/推送记录是 admin-only），
+// 所以默认落在「用户」上，别先选中一个看不到的 tab。
+const tab = ref(auth.isAdmin ? 'push' : 'users')
 const settings = ref<SystemSettings | null>(null)
 const loading = ref(false)
 
@@ -221,11 +223,18 @@ const adForm = reactive({
   timeout_seconds: 15,
 })
 
+const adLoadFailed = ref(false)
+
 async function loadAdSettings() {
+  // 只有 admin 需要看 AD 配置 —— 普通用户看不到「运行时配置」这个 tab，
+  // 不该发这个请求（它是 admin-only，调用会 403）
+  if (!auth.isAdmin) return
+  adLoadFailed.value = false
   try {
     adSettings.value = await systemApi.adSettings()
   } catch (error) {
-    // AD 未配置 / 后端未启用时不打扰管理员
+    // 读失败时**不要一直显示骨架屏**（看着像在加载）—— 明确显示错误
+    adLoadFailed.value = true
     console.warn('AD 设置读取失败', error)
   }
 }
@@ -461,12 +470,22 @@ onMounted(() => {
 
     <el-tabs v-model="tab" class="settings-tabs" data-testid="settings-tabs">
       <!-- 推送记录（原独立页面迁入） -->
-      <el-tab-pane label="推送记录" name="push" data-testid="settings-tab-push">
+      <el-tab-pane
+        v-if="auth.isAdmin"
+        label="推送记录"
+        name="push"
+        data-testid="settings-tab-push"
+      >
         <PushRecordsPanel />
       </el-tab-pane>
 
       <!-- 运行时配置 -->
-      <el-tab-pane label="运行时配置" name="runtime" data-testid="settings-tab-runtime">
+      <el-tab-pane
+        v-if="auth.isAdmin"
+        label="运行时配置"
+        name="runtime"
+        data-testid="settings-tab-runtime"
+      >
         <div v-loading="loading" class="runtime">
           <el-alert
             type="info"
@@ -642,67 +661,6 @@ onMounted(() => {
             </el-col>
 
       <!-- AD / LDAP 对接（2026-11-12） -->
-      <el-col :span="24">
-        <el-card shadow="never" class="cfg-card" data-testid="cfg-card-ad">
-          <template #header>
-            <div class="card-head">
-              <span>AD 对接（域账号登录）</span>
-              <div class="card-head__actions">
-                <el-tag
-                  v-if="adSettings"
-                  :type="adSettings.configured ? 'success' : 'info'"
-                  size="small"
-                  data-testid="cfg-tag-ad"
-                >
-                  {{ adSettings.configured ? '已配置' : '未配置完整' }}
-                </el-tag>
-                <el-tag
-                  v-if="adSettings"
-                  :type="adSettings.sync_enabled ? 'success' : 'info'"
-                  size="small"
-                >
-                  自动同步{{ adSettings.sync_enabled ? '开启' : '关闭' }}
-                </el-tag>
-                <el-button size="small" @click="openAdEdit">配置</el-button>
-                <el-button size="small" :loading="adTesting" @click="onTestAd">
-                  测试连接
-                </el-button>
-                <el-button size="small" :loading="adSyncing" @click="onSyncAd">
-                  立即同步
-                </el-button>
-              </div>
-            </div>
-          </template>
-          <el-descriptions :column="2" size="small" border v-if="adSettings">
-            <el-descriptions-item label="服务器">{{ adSettings.server || '—' }}</el-descriptions-item>
-            <el-descriptions-item label="绑定账号">{{ adSettings.bind_dn || '—' }}</el-descriptions-item>
-            <el-descriptions-item label="根 DN">{{ adSettings.base_dn || '—' }}</el-descriptions-item>
-            <el-descriptions-item label="绑定密码">
-              <span :class="adSettings.bind_password_set ? '' : 'text-muted'">
-                {{ adSettings.bind_password_set ? '已配置' : '未配置' }}
-              </span>
-            </el-descriptions-item>
-            <el-descriptions-item label="登录名映射">
-              <span class="code-chip">{{ adSettings.map_username }}</span>
-            </el-descriptions-item>
-            <el-descriptions-item label="显示名映射">
-              <span class="code-chip">{{ adSettings.map_display_name }}</span>
-            </el-descriptions-item>
-            <el-descriptions-item label="邮箱映射">
-              <span class="code-chip">{{ adSettings.map_email }}</span>
-            </el-descriptions-item>
-            <el-descriptions-item label="同步间隔">
-              {{ adSettings.sync_interval_minutes }} 分钟
-            </el-descriptions-item>
-          </el-descriptions>
-          <el-skeleton v-else :rows="4" animated />
-          <p class="text-muted cfg-hint">
-            admin / ops 走本地账号，其余用户走 AD 认证（登录时直接输 AD 账号名，
-            如 337，不用输 337@livecom.hk）。AD 用户首次登录会自动建档；
-            账号被 AD 禁用后同步会自动停用对应账号。
-          </p>
-        </el-card>
-      </el-col>
 
       <!-- AD 配置弹窗 -->
       <el-dialog v-model="adEditVisible" title="AD 对接配置" width="min(680px, 94vw)">
@@ -759,6 +717,70 @@ onMounted(() => {
         </template>
       </el-dialog>
 
+      <el-col :span="12">
+        <el-card shadow="never" class="cfg-card" data-testid="cfg-card-ad">
+          <template #header>
+            <div class="card-head">
+              <span>AD 对接（域账号登录）</span>
+              <div class="card-head__actions">
+                <el-tag
+                  v-if="adSettings"
+                  :type="adSettings.configured ? 'success' : 'info'"
+                  size="small"
+                  data-testid="cfg-tag-ad"
+                >
+                  {{ adSettings.configured ? '已配置' : '未配置完整' }}
+                </el-tag>
+                <el-tag
+                  v-if="adSettings"
+                  :type="adSettings.sync_enabled ? 'success' : 'info'"
+                  size="small"
+                >
+                  自动同步{{ adSettings.sync_enabled ? '开启' : '关闭' }}
+                </el-tag>
+                <el-button size="small" @click="openAdEdit">配置</el-button>
+                <el-button size="small" :loading="adTesting" @click="onTestAd">
+                  测试连接
+                </el-button>
+                <el-button size="small" :loading="adSyncing" @click="onSyncAd">
+                  立即同步
+                </el-button>
+              </div>
+            </div>
+          </template>
+          <el-alert
+            v-else-if="adLoadFailed"
+            type="error"
+            show-icon
+            :closable="false"
+            title="AD 配置读取失败"
+            description="请检查后端服务与 AD 对接接口是否正常。"
+          />
+          <el-descriptions :column="2" size="small" border v-if="adSettings">
+            <el-descriptions-item label="服务器">{{ adSettings.server || '—' }}</el-descriptions-item>
+            <el-descriptions-item label="绑定账号">{{ adSettings.bind_dn || '—' }}</el-descriptions-item>
+            <el-descriptions-item label="根 DN">{{ adSettings.base_dn || '—' }}</el-descriptions-item>
+            <el-descriptions-item label="绑定密码">
+              <span :class="adSettings.bind_password_set ? '' : 'text-muted'">
+                {{ adSettings.bind_password_set ? '已配置' : '未配置' }}
+              </span>
+            </el-descriptions-item>
+            <el-descriptions-item label="登录名映射">
+              <span class="code-chip">{{ adSettings.map_username }}</span>
+            </el-descriptions-item>
+            <el-descriptions-item label="显示名映射">
+              <span class="code-chip">{{ adSettings.map_display_name }}</span>
+            </el-descriptions-item>
+            <el-descriptions-item label="邮箱映射">
+              <span class="code-chip">{{ adSettings.map_email }}</span>
+            </el-descriptions-item>
+            <el-descriptions-item label="同步间隔">
+              {{ adSettings.sync_interval_minutes }} 分钟
+            </el-descriptions-item>
+          </el-descriptions>
+          <el-skeleton v-else :rows="4" animated />
+        </el-card>
+      </el-col>
             <el-col :span="12">
               <el-card shadow="never" class="cfg-card" data-testid="cfg-card-confirm">
                 <template #header><span>确认流程</span></template>
