@@ -122,6 +122,62 @@ function onAiConfigSave(config: InsightAIConfig) {
   }
 }
 
+/**
+ * 暂存：把**当前已绑定的部分**保存到库，但**不关闭弹窗**。
+ *
+ * 场景：模板里变量很多，有时想先绑一部分，去确认其它指标到底该绑哪个，
+ * 再回来接着绑。所以需要「保存（全部绑完 + 关闭）」之外的「暂存」。
+ *
+ * 与「保存」的区别：
+ * - **允许还有变量没绑**（保存要求全部绑完才让点）
+ * - **不关闭弹窗**、不刷新模板列表（刷新会把编辑中的内容重置掉）
+ * - 图表类型独占校验照样拦（绑错了后端会 422）
+ *
+ * 注意 put_bindings 是**全量替换**语义 —— 所以这里提交所有 refId 非空的行，
+ * 「没动的已有绑定」会被保留，「用户主动清空的」会被真正删掉（符合预期）。
+ */
+const bindStaging = ref(false)
+
+async function stageBindings() {
+  if (bindId.value === null) return
+  if (bindIllegalCharts.value.length > 0) {
+    ElMessage.warning('图表类型指标必须绑定到独占一段的变量')
+    return
+  }
+  bindStaging.value = true
+  try {
+    const bindings: BindingItem[] = bindRows.value
+      .filter((r) => r.type !== 'summary')
+      // **只提交已绑定的**（refId 非空）—— 未绑定的先跳过，允许部分暂存
+      .filter((r) => r.type !== 'metric' || r.refId !== null)
+      .map((r) =>
+        r.type === 'metric'
+          ? { placeholder: r.placeholder, binding_type: 'metric', binding_ref_id: r.refId }
+          : { placeholder: r.placeholder, binding_type: 'insight', ai_config: r.aiConfig },
+      )
+    await templateApi.putBindings(bindId.value, bindings)
+    // 显示名是模板级属性（与版本绑定无关），**暂存时也一并保存** ——
+    // 否则「暂存后就走」会导致显示名没落库
+    const labels = Object.fromEntries(
+      Object.entries(summaryLabels.value)
+        .map(([k, v]) => [k, String(v ?? '').trim()])
+        .filter(([, v]) => v),
+    )
+    await templateApi.putSummaryLabels(bindId.value, labels)
+    const left = bindUnbound.value.length
+    ElMessage.success(
+      left > 0
+        ? `已暂存 ${bindings.length} 项绑定，还有 ${left} 个变量未绑定 —— 确认完回来接着绑`
+        : `已暂存 ${bindings.length} 项绑定`,
+    )
+    // **不关闭弹窗、不刷新列表**（刷新会把编辑中的内容重置掉）
+  } catch (error) {
+    ElMessage.error(parseApiError(error).message)
+  } finally {
+    bindStaging.value = false
+  }
+}
+
 /* ---- 预览 / 编辑 / 版本 / 授权 ---- */
 const previewVisible = ref(false)
 const previewRow = ref<TemplateListItem | null>(null)
@@ -798,6 +854,16 @@ async function onBatchDelete(): Promise<void> {
 
       <template #footer>
         <el-button @click="bindVisible = false">取消</el-button>
+        <!-- 暂存：先保存已绑定的部分，不关闭弹窗（变量多时可分段确认） -->
+        <el-button
+          plain
+          :disabled="bindIllegalCharts.length > 0"
+          :loading="bindStaging"
+          data-testid="bind-stage"
+          @click="stageBindings"
+        >
+          暂存
+        </el-button>
         <el-button
           type="primary"
           :disabled="bindUnbound.length > 0 || bindIllegalCharts.length > 0"
