@@ -462,6 +462,9 @@ async def update_metric(
     current_user: User = Depends(get_current_user),
 ) -> MetricDefinition:
     metric = await _get_or_404(db, metric_id)
+    # **先查可见性再查可编辑性**：看不到的返回 404（不泄露「这个 id 存在」），
+    # 看得见但不是自己的才返回 403。
+    ownership.ensure_metric_visible(metric, current_user)
     ownership.ensure_metric_editable(metric, current_user)
     new_type = payload.metric_type or metric.metric_type
     new_ds = (
@@ -522,6 +525,9 @@ async def delete_metric(
     current_user: User = Depends(get_current_user),
 ) -> Response:
     metric = await _get_or_404(db, metric_id)
+    # **先查可见性再查可编辑性**：看不到的返回 404（不泄露「这个 id 存在」），
+    # 看得见但不是自己的才返回 403。
+    ownership.ensure_metric_visible(metric, current_user)
     ownership.ensure_metric_editable(metric, current_user)
     metric.is_active = False  # 软删除
     await db.commit()
