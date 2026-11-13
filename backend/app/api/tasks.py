@@ -155,6 +155,7 @@ async def update_task(
     task = await db.get(ReportTask, task_id)
     if task is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "任务不存在")
+    ownership.ensure_task_visible(task, current_user)
     ownership.ensure_task_editable(task, current_user)
     try:
         task = await task_service.update_task(
@@ -177,6 +178,7 @@ async def set_task_active(
     task = await db.get(ReportTask, task_id)
     if task is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "任务不存在")
+    ownership.ensure_task_visible(task, current_user)
     ownership.ensure_task_editable(task, current_user)
     try:
         task = await task_service.set_active(db, task, active)
@@ -196,6 +198,7 @@ async def delete_task(
     task = await db.get(ReportTask, task_id)
     if task is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "任务不存在")
+    ownership.ensure_task_visible(task, current_user)
     ownership.ensure_task_editable(task, current_user)
     try:
         await task_service.delete_task(db, task)
@@ -226,6 +229,7 @@ async def run_task(
         task = await db.get(ReportTask, task_id)
     if task is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "任务不存在")
+    ownership.ensure_task_visible(task, current_user)
     ownership.ensure_task_editable(task, current_user)
     try:
         report_id = await scheduler.run_task_instance(
