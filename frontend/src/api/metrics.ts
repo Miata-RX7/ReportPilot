@@ -32,6 +32,15 @@ export const metricApi = {
   update(id: number, payload: MetricDefinitionUpdate) {
     return http.put<MetricDefinitionRead>(`/metrics/${id}`, payload)
   },
+  /** 该指标被哪些模板的哪些变量绑定（删除前提示用） */
+  templateBindings(id: number) {
+    return http.get<{
+      template_id: number
+      template_name: string
+      placeholder: string
+      version_id: number
+    }[]>(`/metrics/${id}/template-bindings`)
+  },
   remove(id: number) {
     return http.delete<void>(`/metrics/${id}`)
   },

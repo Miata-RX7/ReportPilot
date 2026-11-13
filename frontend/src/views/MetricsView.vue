@@ -1533,9 +1533,40 @@ async function onSubmit() {
 async function onDelete(row: MetricDefinitionRead) {
   const ok = await confirmDelete(row.name)
   if (!ok) return
+
+  // 删除指标会**连带解除模板里的绑定**（2026-11-13）—— 先告诉用户会解绑什么
+  let bindingNote = ''
+  try {
+    const { data } = await metricApi.templateBindings(row.id)
+    if (data.length) {
+      const byTpl = new Map<string, string[]>()
+      for (const b of data) {
+        const list = byTpl.get(b.template_name) ?? []
+        list.push(b.placeholder)
+        byTpl.set(b.template_name, list)
+      }
+      bindingNote = [...byTpl.entries()]
+        .map(([name, vars]) => `「${name}」的变量 ${vars.join('、')}`)
+        .join('；')
+    }
+  } catch {
+    // 查不到绑定不阻断删除（后端仍会兜底解绑）
+  }
+  if (bindingNote) {
+    const confirmed = await ElMessageBox.confirm(
+      `该指标已被模板绑定，删除后会自动解除这些绑定：\n${bindingNote}\n\n确定删除吗？`,
+      '删除指标',
+      { type: 'warning', confirmButtonText: '删除并解绑', cancelButtonText: '取消' },
+    ).then(() => true)
+      .catch(() => false)
+    if (!confirmed) return
+  }
+
   try {
     await metricApi.remove(row.id)
-    ElMessage.success('指标已删除')
+    ElMessage.success(
+      bindingNote ? '指标已删除，相关模板绑定已解除' : '指标已删除',
+    )
     await load()
   } catch (error) {
     ElMessage.error(parseApiError(error).message)
