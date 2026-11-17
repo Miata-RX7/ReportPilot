@@ -194,6 +194,10 @@ export interface UnitScaleConfig {
 }
 
 export interface MetricDefinitionRead {
+  /** 创建人 id（null = 无归属的存量指标） */
+  owner_id?: number | null
+  /** 创建人用户名 —— 同名指标需要靠它区分（2026-11-17） */
+  owner_name?: string | null
   id: number
   name: string
   data_source_id: number

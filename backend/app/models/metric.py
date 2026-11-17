@@ -11,9 +11,13 @@ from app.models.base import Base, JSONVariant, TimestampMixin
 class MetricDefinition(TimestampMixin, Base):
     __tablename__ = "metric_definitions"
     __table_args__ = (
-        # 软删除友好的部分唯一索引：仅活跃记录之间 name 唯一
+        # 软删除友好的部分唯一索引：**同一创建人内** name 唯一
+        # （2026-11-17）。原来只按 name 全局唯一，但指标按创建人隔离可见 ——
+        # 普通用户撞到别人的同名指标只会看到「指标名称已存在」，而那个指标
+        # 他根本看不到。不同创建人可以建同名指标。
         Index(
-            "uq_metric_name_active",
+            "uq_metric_owner_name_active",
+            "owner_id",
             "name",
             unique=True,
             postgresql_where=text("is_active = true"),
