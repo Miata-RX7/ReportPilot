@@ -4,7 +4,7 @@ import axios from 'axios'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import { MoreFilled, QuestionFilled } from '@element-plus/icons-vue'
 
-import { confirmDelete } from '@/components/ConfirmDialog'
+import { confirmDanger, confirmDelete } from '@/components/ConfirmDialog'
 import AiopsScopePicker, { type CascaderSnapshot } from '@/components/AiopsScopePicker.vue'
 import DataTable from '@/components/DataTable.vue'
 import FormDialog from '@/components/FormDialog.vue'
@@ -1544,6 +1544,42 @@ async function onSubmit() {
 }
 
 async function onDelete(row: MetricDefinitionRead) {
+  // **先查有没有计算型指标引用它**（2026-11-17）
+  //
+  // 删除被引用的指标会**连带删除**那些计算型指标（它们的算式会失效，
+  // 留着就会让报告生成失败，而且用户只看到「报告生成失败」不知道根因）。
+  // 所以要先把关系摆出来让用户确认；取消的话他至少知道了两者关系。
+  let refs: { calc_id: number; calc_name: string; var_name: string }[] = []
+  try {
+    const { data } = await metricApi.referencedBy(row.id)
+    refs = data
+  } catch {
+    // 查不到关系不阻断删除（后端仍会兜底级联）
+  }
+
+  if (refs.length > 0) {
+    const lines = refs
+      .map((r) => `　• ${r.calc_name}（变量 ${r.var_name} 引用了它）`)
+      .join('\n')
+    const ok = await confirmDanger(
+      '删除确认',
+      `确认删除「${row.name}」？\n\n` +
+        `⚠ 该指标被以下计算型指标引用，删除时会一并删除：\n${lines}\n\n` +
+        `这些计算型指标在模板中的绑定也会被解除。`,
+    )
+    if (!ok) return
+    try {
+      await metricApi.remove(row.id)
+      ElMessage.success(
+        `已删除指标「${row.name}」，并同时删除 ${refs.length} 个引用它的计算型指标`,
+      )
+      await load()
+    } catch (error) {
+      ElMessage.error(parseApiError(error).message)
+    }
+    return
+  }
+
   const ok = await confirmDelete(row.name)
   if (!ok) return
 
@@ -1739,7 +1775,27 @@ onMounted(load)
           @selection-change="onSelectionChange"
         >
       <template #columns>
-        <el-table-column prop="name" label="名称" min-width="150" />
+        <el-table-column prop="name" label="名称" min-width="150">
+          <template #default="{ row }">
+            <span>{{ row.name }}</span>
+            <!-- 计算型指标的依赖失效标记（2026-11-17）：
+                 引用的基础指标被删了 -> 这个算式算不出来 -> 绑它的模板生成报告会失败 -->
+            <el-tooltip
+              v-if="row.broken_deps && row.broken_deps.length"
+              placement="top"
+            >
+              <template #content>
+                <div>以下依赖已失效，无法计算：</div>
+                <div v-for="d in row.broken_deps" :key="d.metric_id">
+                  • {{ d.name }}（变量 {{ d.var_name }}）
+                </div>
+              </template>
+              <el-tag type="danger" size="small" effect="plain" class="ml6">
+                依赖失效
+              </el-tag>
+            </el-tooltip>
+          </template>
+        </el-table-column>
     <!-- 创建人只有 admin 能看到（后端也只在 admin 时返回，普通用户拿不到） -->
     <el-table-column v-if="auth.isAdmin" prop="owner_name" label="创建人" width="120" />
 

@@ -198,6 +198,8 @@ export interface MetricDefinitionRead {
   owner_id?: number | null
   /** 创建人用户名 —— 同名指标需要靠它区分（2026-11-17） */
   owner_name?: string | null
+  /** 计算型指标：依赖里已失效的那些（空 = 依赖都还在）2026-11-17 */
+  broken_deps?: { metric_id: number; name: string; var_name: string }[]
   id: number
   name: string
   data_source_id: number

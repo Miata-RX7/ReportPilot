@@ -32,6 +32,7 @@ async def validate_calculated_config(
     *,
     query_config: dict[str, Any] | None,
     data_source_id: int | None,
+    owner_id: int | None = None,
 ) -> None:
     """校验计算型指标的算式与变量定义。**不合法就抛 ValueError**。
 
@@ -99,4 +100,17 @@ async def validate_calculated_config(
             raise ValueError(
                 f"变量 {name} 引用的「{dep.name}」与计算型指标的数据源不同，"
                 "无法计算（请把计算型指标的数据源改成同一个）"
+            )
+        # **只能引用自己创建的指标**（2026-11-17）。
+        #
+        # 指标按创建人隔离可见，引用却能跨界的话，删除时会出现隐蔽的越权：
+        # A 建了引用 B 指标的算式 X，B 删自己的指标 -> 级联删除会把 A 的 X
+        # 一起删掉。限定同 owner 后，级联删除永远在自己范围内。
+        #
+        # 前端本来也只列「自己可见的指标」（所以 UI 上选不到别人的），
+        # 这里是把这条隐式规则变成后端明确规则。
+        if owner_id is not None and dep.owner_id != owner_id:
+            raise ValueError(
+                f"变量 {name} 引用的「{dep.name}」不是您创建的指标，"
+                "不能参与计算（请复制一份到自己名下）"
             )

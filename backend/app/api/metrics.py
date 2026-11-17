@@ -125,6 +125,7 @@ async def create_metric(
                 db,
                 query_config=payload.query_config.model_dump(),
                 data_source_id=payload.data_source_id,
+                owner_id=current_user.id,
             )
         except ValueError as exc:
             raise HTTPException(
@@ -434,6 +435,10 @@ async def list_metrics(
     visible = [m for m in metrics if ownership.metric_visible_to(m, current_user)]
     resolved = await _resolve_many(db, visible)
     owner_names = await _owner_name_map(db, {m.owner_id for m in visible if m.owner_id})
+    # 计算型指标的失效依赖（2026-11-17）—— 列表上打 ⚠ 标记用
+    from app.services.metric_deps import broken_dependencies_of
+
+    broken = await broken_dependencies_of(db, visible)
     return [
         MetricListItem(
             **_to_read(m).model_dump(),
@@ -441,6 +446,8 @@ async def list_metrics(
             owner_id=m.owner_id,
             # 只有 admin 能看到创建人 —— 在后端就掐掉，不靠前端隐藏
             owner_name=owner_names.get(m.owner_id) if ownership.is_admin(current_user) else None,
+            # 计算型指标：依赖里已失效的那些（2026-11-17）
+            broken_deps=broken.get(m.id, []),
         )
         for m in visible
     ]
@@ -462,6 +469,9 @@ async def get_metric(
     owner_names = await _owner_name_map(
         db, {metric.owner_id} if metric.owner_id else set()
     )
+    from app.services.metric_deps import broken_dependencies_of
+
+    broken = await broken_dependencies_of(db, [metric])
     return MetricDetail(
         **_to_read(metric).model_dump(),
         query_config_resolved=resolved,
@@ -469,6 +479,7 @@ async def get_metric(
         owner_name=owner_names.get(metric.owner_id)
         if ownership.is_admin(current_user)
         else None,
+        broken_deps=broken.get(metric.id, []),
     )
 
 
@@ -501,6 +512,7 @@ async def update_metric(
                 db,
                 query_config=new_query,
                 data_source_id=new_ds,
+                owner_id=metric.owner_id,
             )
         except ValueError as exc:
             raise HTTPException(
@@ -550,6 +562,29 @@ async def delete_metric(
     ownership.ensure_metric_visible(metric, current_user)
     ownership.ensure_metric_editable(metric, current_user)
 
+    # **删除指标会连带删除引用它的计算型指标**（2026-11-17）。
+    #
+    # 计算型指标的算式靠 metric_id 引用别的指标。被引用的指标删了，
+    # 计算型指标就再也算不出来 -> 绑了它的模板生成报告必然失败，而且用户
+    # 只看到「报告生成失败」，不知道根因是哪个指标被删了。
+    #
+    # 所以这里**级联删除**这些计算型指标（用户意图是「不再用这个指标了」，
+    # 那依赖它的算式也就没有意义了）。删除前前端会先查
+    # ``GET /metrics/{id}/referenced-by`` 列出关系让用户确认。
+    #
+    # 引用只能发生在**同一 owner 内**（validate_calculated_config 有校验），
+    # 所以级联删除不会越权删别人的东西。
+    from app.services.metric_deps import dependents_of
+
+    victims = await dependents_of(db, metric_id)
+    for victim, _var in victims:
+        logger.info(
+            "指标删除 -> 级联删除计算型指标 metric_id=%d 连带 calc_id=%d name=%s",
+            metric_id,
+            victim.id,
+            victim.name,
+        )
+
     # **删除指标要连带解绑模板**（2026-11-13）。
     # 不解绑的话，模板里会留下指向已停用指标的绑定 -> 报告生成时直接失败
     # （「变量 xxx 绑定的指标不存在或已停用」），而且用户在绑定页根本没法
@@ -573,6 +608,29 @@ async def delete_metric(
             metric_id,
             len(bound_rows),
             tpl_names,
+        )
+
+    # ---- 级联：删掉引用它的计算型指标（连同它们的模板绑定）----
+    # 计算型指标可能被模板绑着（实测「上月中断时长」就绑在模板上）——
+    # 不解绑的话模板会留下悬空绑定 -> 报告生成报「绑定的指标不存在或已停用」。
+    if victims:
+        victim_ids = [v.id for v, _ in victims]
+        victim_bindings = (
+            await db.scalars(
+                select(TemplateBinding).where(
+                    TemplateBinding.binding_type == "metric",
+                    TemplateBinding.binding_ref_id.in_(victim_ids),
+                )
+            )
+        ).all()
+        for b in victim_bindings:
+            await db.delete(b)
+        for victim, _var in victims:
+            victim.is_active = False  # 软删除
+        logger.info(
+            "级联删除计算型指标 %d 个，解除其模板绑定 %d 处",
+            len(victims),
+            len(victim_bindings),
         )
 
     metric.is_active = False  # 软删除
@@ -599,6 +657,32 @@ async def _template_names_of_bindings(
         )
     ).scalars().all()
     return sorted(set(rows))
+
+
+@router.get("/{metric_id}/referenced-by")
+async def list_metric_referenced_by(
+    metric_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[dict[str, Any]]:
+    """**哪些计算型指标引用了这个指标**（删除前给用户看关系）。
+
+    删除这个指标时，这些计算型指标会被**一并删除**（它们的算式会失效），
+    所以要让用户先看清关系再决定。
+    """
+    metric = await _get_or_404(db, metric_id)
+    ownership.ensure_metric_visible(metric, current_user)
+    from app.services.metric_deps import dependents_of
+
+    deps = await dependents_of(db, metric_id)
+    return [
+        {
+            "calc_id": calc.id,
+            "calc_name": calc.name,
+            "var_name": var_name,
+        }
+        for calc, var_name in deps
+    ]
 
 
 @router.get("/{metric_id}/template-bindings")
