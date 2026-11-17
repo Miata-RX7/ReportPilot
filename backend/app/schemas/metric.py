@@ -712,10 +712,23 @@ class QueryConfigResolved(BaseModel):
     series: list[ResolvedItem] = Field(default_factory=list)
 
 
+class BrokenDependency(BaseModel):
+    """计算型指标的一条**失效依赖**（被引用的指标已被删除/停用）。"""
+
+    #: 被引用（已失效）的指标 id
+    metric_id: int
+    #: 被引用指标的名字
+    name: str
+    #: 算式里的变量名
+    var_name: str
+
+
 class MetricListItem(MetricDefinitionRead):
     """列表项：附带 id -> name 解析结果（数据源不可达时为 null）。"""
 
     query_config_resolved: QueryConfigResolved | None = None
+    #: 计算型指标：依赖里已失效的那些（空 = 依赖都还在）。2026-11-17
+    broken_deps: list[BrokenDependency] = []
     #: 归属人 id
     owner_id: int | None = None
     #: 归属人名字 —— **只有 admin 才会被填充**，普通用户恒为 None
@@ -724,6 +737,8 @@ class MetricListItem(MetricDefinitionRead):
 
 class MetricDetail(MetricDefinitionRead):
     query_config_resolved: QueryConfigResolved | None = None
+    #: 计算型指标：依赖里已失效的那些（空 = 依赖都还在）。2026-11-17
+    broken_deps: list[BrokenDependency] = []
     #: 归属人 id
     owner_id: int | None = None
     #: 归属人名字 —— **只有 admin 才会被填充**

@@ -41,6 +41,14 @@ export const metricApi = {
       version_id: number
     }[]>(`/metrics/${id}/template-bindings`)
   },
+  /** 哪些计算型指标引用了这个指标（删除前展示关系） */
+  referencedBy(id: number) {
+    return http.get<{
+      calc_id: number
+      calc_name: string
+      var_name: string
+    }[]>(`/metrics/${id}/referenced-by`)
+  },
   remove(id: number) {
     return http.delete<void>(`/metrics/${id}`)
   },
