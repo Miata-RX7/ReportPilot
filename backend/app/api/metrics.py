@@ -70,15 +70,32 @@ async def _get_or_404(db: AsyncSession, metric_id: int) -> MetricDefinition:
 
 
 async def _check_name_conflict(
-    db: AsyncSession, name: str, exclude_id: int | None = None
+    db: AsyncSession,
+    name: str,
+    owner_id: int | None,
+    exclude_id: int | None = None,
 ) -> None:
+    """同一创建人内不能重名；**不同创建人可以同名**（2026-11-17）。
+
+    改之前是全局唯一 —— 但指标按创建人隔离可见，于是普通用户撞到别人的
+    同名指标时只会看到一句「指标名称已存在」，而那个指标他根本看不到。
+    现在唯一性与可见性对齐：普通用户只撞得到自己建过的名字。
+
+    DB 层由 ``uq_metric_owner_name_active`` 部分唯一索引兜底
+    （``WHERE is_active = true``，作用域 ``(owner_id, name)``）。
+    """
     stmt = select(MetricDefinition.id).where(
-        MetricDefinition.name == name, MetricDefinition.is_active.is_(True)
+        MetricDefinition.name == name,
+        MetricDefinition.owner_id == owner_id,
+        MetricDefinition.is_active.is_(True),
     )
     if exclude_id is not None:
         stmt = stmt.where(MetricDefinition.id != exclude_id)
     if (await db.scalar(stmt)) is not None:
-        raise HTTPException(status.HTTP_409_CONFLICT, f"指标名称已存在: {name}")
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"您已创建过同名指标：{name}（指标名在同一创建人内唯一）",
+        )
 
 
 async def _check_datasource(db: AsyncSession, datasource_id: int) -> None:
@@ -113,7 +130,7 @@ async def create_metric(
             raise HTTPException(
                 status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)
             ) from None
-    await _check_name_conflict(db, payload.name)
+    await _check_name_conflict(db, payload.name, current_user.id)
     calc_formula = getattr(payload, "calc_formula", None)
     metric = MetricDefinition(
         owner_id=current_user.id,
@@ -490,7 +507,9 @@ async def update_metric(
                 status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)
             ) from None
     if payload.name is not None and payload.name != metric.name:
-        await _check_name_conflict(db, payload.name, exclude_id=metric.id)
+        await _check_name_conflict(
+            db, payload.name, metric.owner_id, exclude_id=metric.id
+        )
         metric.name = payload.name
     if payload.data_source_id is not None:
         await _check_datasource(db, payload.data_source_id)
