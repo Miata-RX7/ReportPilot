@@ -84,6 +84,19 @@ const METRIC_TYPES: MetricType[] = [
 const rows = ref<MetricListItem[]>([])
 
 /**
+ * 能否编辑/删除这个指标（2026-11-17）。
+ *
+ * 后端早就放开了「所有人可创建指标」，可见性也改成了「只看自己创建的」，
+ * 但前端的按钮一直还挂在 `auth.isAdmin` 上 —— 普通用户既建不了、也改不了
+ * 自己的指标。这里跟随后端：admin 全部可操作；普通用户只能操作**自己**的。
+ */
+function canEdit(row: { owner_id?: number | null }): boolean {
+  if (auth.isAdmin) return true
+  const me = auth.user?.id
+  return !!me && row.owner_id === me
+}
+
+/**
  * 计算型指标可引用的指标：**只有数值类型（scalar）**。
  *
  * 曲线/饼图/文本的值不是单个数，算不了；计算型指标暂不支持嵌套。
@@ -1661,7 +1674,8 @@ onMounted(load)
   <div class="page-container">
     <PageHeader title="指标管理" description="定义取数范围与聚合口径，产出计算变量供模板引用">
       <template #actions>
-        <el-button v-if="auth.isAdmin" type="primary" @click="openCreate">新增指标</el-button>
+        <!-- 新增指标：**所有人可创建**（后端 create_metric 用 get_current_user） -->
+        <el-button type="primary" @click="openCreate">新增指标</el-button>
       </template>
     </PageHeader>
 
@@ -1699,7 +1713,7 @@ onMounted(load)
         它是针对「当前勾选」的操作，和筛选器同属表格上方的操作区。
       -->
       <el-button
-        v-if="auth.isAdmin && selectedMetrics.length > 0"
+        v-if="selectedMetrics.length > 0"
         type="danger"
         plain
         class="filter-batch"
@@ -1787,12 +1801,22 @@ onMounted(load)
             </span>
           </template>
         </el-table-column>
-        <el-table-column v-if="auth.isAdmin" label="操作" width="170" fixed="right">
+        <!-- 操作列：所有登录用户可见（试算谁都能做），
+             但**编辑 / 删除只对自己的指标**可用（跟随后端的归属规则） -->
+        <el-table-column label="操作" width="170" fixed="right">
           <template #default="{ row }">
             <div class="action-cell">
-              <el-button link type="primary" data-testid="metric-action-edit" @click="openEdit(row)">编辑</el-button>
+              <el-button
+                v-if="canEdit(row)"
+                link
+                type="primary"
+                data-testid="metric-action-edit"
+                @click="openEdit(row)"
+              >
+                编辑
+              </el-button>
               <el-button link type="primary" data-testid="metric-action-compute" @click="openCompute(row.id, row.display_precision)">试算</el-button>
-              <el-dropdown trigger="click" @command="(cmd: unknown) => onRowCommand(String(cmd), row)">
+              <el-dropdown v-if="canEdit(row)" trigger="click" @command="(cmd: unknown) => onRowCommand(String(cmd), row)">
                 <el-button link type="primary" data-testid="metric-action-more">
                   <el-icon><MoreFilled /></el-icon>
                 </el-button>
