@@ -206,6 +206,10 @@ def _resolved_item(key: str, got: dict[str, Any]) -> ResolvedItem:
     )
 
 
+#: 名称回填的整体超时（秒）—— 超时则放弃回填，列表照常返回
+_RESOLVE_TIMEOUT_SECONDS = 8.0
+
+
 async def _resolve_many(
     db: AsyncSession, metrics: list[MetricDefinition]
 ) -> dict[int, QueryConfigResolved]:
@@ -299,10 +303,29 @@ async def _resolve_many(
             async with sem:
                 return await coro
 
-        results = await asyncio.gather(
-            guarded(adapter.list_host_groups()),
-            *(guarded(do_bucket(hids, slot)) for hids, slot in buckets.items()),
-        )
+        # **整体超时保护**（2026-11-18）。
+        #
+        # 名称回填只是「锦上添花」，不该把列表页拖死。Zabbix 不可达时适配器
+        # 会一直等到自己的 connect timeout（数据源里配的 30s）才返回，
+        # guarded 只吞异常、并不加速 —— 于是列表页要干等 30s。
+        #
+        # 这里给解析整体加一个短超时：超时就**放弃名称回填**（名称列留空），
+        # 列表照常秒回。取数（calc_engine）不受影响，仍用适配器自己的超时。
+        try:
+            results = await asyncio.wait_for(
+                asyncio.gather(
+                    guarded(adapter.list_host_groups()),
+                    *(guarded(do_bucket(hids, slot)) for hids, slot in buckets.items()),
+                ),
+                timeout=_RESOLVE_TIMEOUT_SECONDS,
+            )
+        except (asyncio.TimeoutError, Exception) as exc:
+            logger.warning(
+                "名称回填超时或失败（%.0fs），本次不解析名称：%s",
+                _RESOLVE_TIMEOUT_SECONDS,
+                type(exc).__name__,
+            )
+            return {}
         groups = results[0]
         gmap = {str(g["group_id"]): g["name"] for g in groups}
 
