@@ -661,6 +661,22 @@ onMounted(load)
               <span :class="['soft-tag', `soft-tag--${statusSoftClass(row.status)}`]">
                 {{ STATUS_LABEL[row.status as ReportStatus] }}
               </span>
+              <!-- 部分成功：把无数据的变量逐条列出来（2026-11-18） -->
+              <el-tooltip
+                v-if="row.no_data_vars && row.no_data_vars.length"
+                placement="top"
+                class="ml4"
+              >
+                <template #content>
+                  <div>以下变量本期取不到数据，报告中已替换为 NO_DATA：</div>
+                  <div v-for="d in row.no_data_vars" :key="d.placeholder">
+                    • {{ d.placeholder }}（{{ d.metric_name }}）
+                  </div>
+                </template>
+                <el-tag type="warning" size="small" effect="plain">
+                  {{ row.no_data_vars.length }} 个变量无数据
+                </el-tag>
+              </el-tooltip>
               <el-tag
                 v-if="isConfirmationExpired(row)"
                 type="warning"

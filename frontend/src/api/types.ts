@@ -524,6 +524,8 @@ export type ReportStatus =
   | 'pending'
   | 'generating'
   | 'pending_confirmation'
+  /** 「部分成功」：有变量取不到数（文档里填 NO_DATA）但报告已生成（2026-11-18） */
+  | 'partial_success'
   | 'confirmed'
   /** 「仅确认不发送」的终态（2026-11-12） */
   | 'confirmed_no_push'
@@ -546,6 +548,8 @@ export interface ReportRead {
   file_path: string | null
   last_error: string | null
   error_stage: string | null
+  /** 本期取不到数、被填成 NO_DATA 的变量（部分成功，2026-11-18） */
+  no_data_vars?: { placeholder: string; metric_name: string; reason: string }[]
   confirmation_sent_at: string | null
   expires_at: string | null
   confirmed_at: string | null
@@ -757,6 +761,8 @@ export interface ConfirmPreview {
   ai_summary: string | null
   metric_count: number
   abnormal_count: number
+  /** 本期取不到数、被填成 NO_DATA 的变量（部分成功，2026-11-18） */
+  no_data_vars?: { placeholder: string; metric_name: string; reason: string }[]
   /** 模板里声明的「总结_」占位（不含大括号），确认人据此选择把总结填到哪一处 */
   /** 确认人下载过 Word 版的时间（有值 -> 提醒他点「仅确认不发送」） */
   docx_downloaded_at?: string | null

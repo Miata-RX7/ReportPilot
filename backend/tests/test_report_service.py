@@ -52,6 +52,8 @@ class TestStateMachineTable:
             "pending",
             "generating",
             "pending_confirmation",
+            # 「部分成功」：有变量取不到数 -> 文档里填 NO_DATA（2026-11-18）
+            "partial_success",
             "confirmed",
             # 「仅确认不发送」的终态（2026-11-12）
             "confirmed_no_push",
@@ -67,9 +69,23 @@ class TestStateMachineTable:
     def test_pushed_is_terminal(self) -> None:
         assert ALLOWED_ACTIONS["pushed"] == set()
 
+    def test_partial_success_allows_confirmation_flow(self) -> None:
+        """部分成功的报告仍要走完整确认流程（只是提醒确认人哪些变量无数据）。"""
+        assert ALLOWED_ACTIONS["partial_success"] == {
+            "confirm",
+            "confirm_only",
+            "confirm_by_admin",
+            "resend_confirmation",
+        }
+
     def test_allowed_actions_per_status(self) -> None:
         assert ALLOWED_ACTIONS["pending"] == {"claim"}
-        assert ALLOWED_ACTIONS["generating"] == {"generate_ok", "generate_fail"}
+        assert ALLOWED_ACTIONS["generating"] == {
+        "generate_ok",
+        "generate_fail",
+        # 部分成功（2026-11-18）：有变量取不到数 -> 文档里填 NO_DATA
+        "generate_partial",
+    }
         assert ALLOWED_ACTIONS["pending_confirmation"] == {
             "confirm",
             # 「仅确认不发送」（2026-11-12）
