@@ -13,6 +13,9 @@ import { reportFileApi, type ReportFile, type SummaryDraft } from '@/api/reportF
 const route = useRoute()
 
 const preview = ref<ConfirmPreview | null>(null)
+
+/** 部分成功：本期取不到数、被填成 NO_DATA 的变量（2026-11-18） */
+const noDataVars = computed(() => preview.value?.no_data_vars ?? [])
 const result = ref<ConfirmResult | null>(null)
 const loading = ref(true)
 const confirming = ref(false)
@@ -430,6 +433,22 @@ onMounted(load)
               ，{{ preview.abnormal_count }} 个异常（变化超过 10%）
             </span>
           </el-descriptions-item>
+          <!-- 部分成功（2026-11-18）：取不到数的变量已填成 NO_DATA，逐条列出 -->
+          <el-descriptions-item v-if="noDataVars.length" label="无数据变量">
+            <div class="no-data-list">
+              <div class="no-data-list__title">
+                以下 {{ noDataVars.length }} 个变量本期取不到数据，报告中已替换为
+                <code>NO_DATA</code>，请确认后再放行：
+              </div>
+              <ul class="no-data-list__items">
+                <li v-for="d in noDataVars" :key="d.placeholder">
+                  <code>{{ d.placeholder }}</code>
+                  <span class="no-data-list__metric">{{ d.metric_name }}</span>
+                  <span class="no-data-list__reason">{{ d.reason }}</span>
+                </li>
+              </ul>
+            </div>
+          </el-descriptions-item>
           <el-descriptions-item label="确认有效期">
             {{ formatDateTime(preview.expires_at) }}
             <el-tag v-if="preview.is_expired" type="warning" size="small" class="ml4">已过期</el-tag>
@@ -618,6 +637,31 @@ onMounted(load)
     </div>
   </div>
 </template>
+
+<style scoped lang="scss">
+/* 部分成功：无数据变量明细（2026-11-18） */
+.no-data-list {
+  font-size: 13px;
+  line-height: 1.7;
+}
+.no-data-list__title {
+  margin-bottom: 4px;
+  color: var(--rp-text-muted, #606266);
+}
+.no-data-list__items {
+  margin: 0;
+  padding-left: 18px;
+}
+.no-data-list__metric {
+  margin-left: 8px;
+  color: var(--rp-text-muted, #606266);
+}
+.no-data-list__reason {
+  margin-left: 8px;
+  font-size: 12px;
+  color: var(--rp-text-muted, #909399);
+}
+</style>
 
 <style scoped lang="scss">
 /* ---- 报告预览 ---- */

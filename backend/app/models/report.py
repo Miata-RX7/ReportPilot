@@ -19,6 +19,9 @@ REPORT_STATUSES = (
     "pending",
     "generating",
     "pending_confirmation",
+    # 「部分成功」：有变量取不到数（文档里填 NO_DATA）但报告已生成（2026-11-18）。
+    # 后续动作与 pending_confirmation 相同。
+    "partial_success",
     "confirmed",
     # 「仅确认不发送」的终态：确认人自己线下处理了，系统不再发也不再催（2026-11-12）
     "confirmed_no_push",
@@ -76,6 +79,10 @@ class Report(TimestampMixin, Base):
     # 事实层快照：[MetricFact 序列化 dict]，含 source/object/formula/period 证据字段。
     # 指标值仅由计算引擎写入，AI 不可修改；快照后 metric 配置变化不影响历史报告
     facts_json: Mapped[list[Any]] = mapped_column(JSONVariant, default=list)
+    #: 本期**取不到数**的变量清单（2026-11-18）。
+    #: 形如 [{"placeholder": "...", "metric_name": "...", "reason": "..."}]
+    #: —— 这些占位在报告里被填成 NO_DATA，报告状态为 partial_success。
+    no_data_vars: Mapped[list[Any]] = mapped_column(JSONVariant, default=list)
     # 洞察层：{槽位key: {"text": ..., "unverified_numbers": [...], "degraded": bool}}
     insights_json: Mapped[dict[str, Any]] = mapped_column(JSONVariant, default=dict)
     file_path: Mapped[str | None] = mapped_column(String(512), nullable=True)

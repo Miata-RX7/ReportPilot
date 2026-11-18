@@ -141,6 +141,8 @@ async def preview_confirmation(
         ai_summary=summary,
         metric_count=count,
         abnormal_count=abnormal,
+        # 部分成功：告诉确认人哪些变量没数据（报告里已填 NO_DATA）
+        no_data_vars=list(report.no_data_vars or []),
         token_state=state,
         message=message,
     )

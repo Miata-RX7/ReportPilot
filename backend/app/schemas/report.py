@@ -104,6 +104,8 @@ class ReportDetail(ReportRead):
 
     facts_json: list[dict[str, Any]]
     insights_json: dict[str, Any]
+    #: 本期取不到数、被填成 NO_DATA 的变量（部分成功，2026-11-18）
+    no_data_vars: list[dict[str, Any]] = []
     audits: list[AuditRead]
     push_records: list[PushRecordRead] = []
 
@@ -160,6 +162,9 @@ class ConfirmPreview(BaseModel):
     summary_placeholders: list[str] = Field(default_factory=list)
     #: 确认人下载过 Word 版的时间（有值 -> 确认页提醒他点「仅确认不发送」）
     docx_downloaded_at: datetime | None = None
+    #: 本期取不到数、被填成 NO_DATA 的变量（部分成功，2026-11-18）。
+    #: 确认页逐条列出，让确认人知道哪里没数据。
+    no_data_vars: list[dict[str, str]] = Field(default_factory=list)
     #: {占位名: 显示名}，给确认页用（如 {"summary_assets_info": "资产信息"}）
     summary_placeholder_labels: dict[str, str] = Field(default_factory=dict)
     # token 校验结果：valid / invalid / used / expired

@@ -44,6 +44,7 @@ from app.services.preview_service import (
     build_context,
     collect_facts,
     compute_template_facts,
+    compute_template_facts_ex,
     make_image_factory,
 )
 from app.services.task_service import (
@@ -60,7 +61,15 @@ MAX_RECIPIENTS = 20
 
 ALLOWED_ACTIONS: dict[str, set[str]] = {
     "pending": {"claim"},
-    "generating": {"generate_ok", "generate_fail"},
+    "generating": {"generate_ok", "generate_fail", "generate_partial"},
+    # 「部分成功」：有变量取不到数（被填成 NO_DATA）但报告已生成（2026-11-18）。
+    # 后续动作与 pending_confirmation 相同 —— 报告是完整的，只是部分位置无数据。
+    "partial_success": {
+            "confirm",
+            "confirm_only",
+            "confirm_by_admin",
+            "resend_confirmation",
+        },
     "pending_confirmation": {
             "confirm",
             # 「仅确认不发送」（2026-11-12）：确认人线下自己处理了，
@@ -223,8 +232,12 @@ async def _render_report(
     version: TemplateVersion,
     *,
     actor_id: int | None = None,
-) -> tuple[list[MetricFact], dict[str, dict]]:
-    """生成核心：计算 facts -> 逐槽位 AI 摘要 -> 渲染 docx。"""
+) -> tuple[list[MetricFact], dict[str, dict], list[dict[str, str]]]:
+    """生成核心：计算 facts -> 逐槽位 AI 摘要 -> 渲染 docx。
+
+    返回 (facts, insights, no_data_vars) —— no_data_vars 是**取不到数、被填成
+    NO_DATA** 的变量清单（2026-11-18）。
+    """
     logger.info(
         "报告生成开始 id=%d template=%d version=%d period=%s",
         report.id,
@@ -232,8 +245,10 @@ async def _render_report(
         version.version_no,
         report.period,
     )
-    bindings, facts_by_ph, metrics_by_ph = await compute_template_facts(
-        db, version, report.period
+    # **allow_no_data=True**：某个变量取不到数不再整份失败，记进 no_data_vars，
+    # 该占位在文档里填 NO_DATA，报告继续生成（状态 partial_success）。
+    bindings, facts_by_ph, metrics_by_ph, no_data_vars = await compute_template_facts_ex(
+        db, version, report.period, allow_no_data=True
     )
     facts_list = collect_facts(facts_by_ph)
     logger.info("指标计算完成 id=%d count=%d", report.id, len(facts_list))
@@ -254,8 +269,9 @@ async def _render_report(
         facts_by_ph,
         metrics_by_ph,
         {slot: data["text"] for slot, data in insights.items()},
+        no_data_vars=no_data_vars,
     )
-    return facts_list, insights
+    return facts_list, insights, no_data_vars
 
 
 async def generate_insights(
@@ -309,6 +325,7 @@ def render_report_docx(
     facts_by_ph: dict[str, MetricFact],
     metrics_by_ph: dict[str, MetricDefinition],
     insight_texts: dict[str, str],
+    no_data_vars: list[dict[str, str]] | None = None,
 ) -> Path:
     """把 facts + 各段摘要文本渲染成报告 docx（不取数、不调 AI）。
 
@@ -330,6 +347,7 @@ def render_report_docx(
             insight_texts,
             image_factory=make_image_factory(tpl),
             template_summary_placeholders=summary_placeholders_of(tpl),
+            no_data_vars=no_data_vars,
         )
         render_docx(tpl_path, context, output, tpl=tpl)
     except RenderError as exc:
@@ -356,14 +374,37 @@ async def run_generation(report_id: int, *, actor_id: int | None = None) -> str 
             await db.commit()
 
             _, version = await _resolve_version(db, report)
-            facts_list, insights = await _render_report(
+            facts_list, insights, no_data_vars = await _render_report(
                 db, report, version, actor_id=actor_id
             )
             report.facts_json = [f.model_dump() for f in facts_list]
             report.insights_json = insights
-            _set_status(report, "pending_confirmation", "generate_ok")
+            # 部分成功（2026-11-18）：取不到数的变量已按 NO_DATA 填入文档
+            report.no_data_vars = no_data_vars or []
+            if report.no_data_vars:
+                # 状态 partial_success —— 仍走完整确认流程，只是提醒确认人
+                # 哪些变量没有数据。
+                _set_status(report, "partial_success", "generate_partial")
+                logger.warning(
+                    "报告部分成功 id=%d 无数据变量 %d 个：%s",
+                    report.id,
+                    len(report.no_data_vars),
+                    [d.get("placeholder") for d in report.no_data_vars],
+                )
+            else:
+                _set_status(report, "pending_confirmation", "generate_ok")
             raw_token = _arm_confirmation(report)
-            _audit(db, report.id, actor_id, "generate_ok", "生成完成，待确认")
+            _audit(
+                db,
+                report.id,
+                actor_id,
+                "generate_partial" if report.no_data_vars else "generate_ok",
+                (
+                    f"生成完成（部分成功，{len(report.no_data_vars)} 个变量无数据，已填 NO_DATA）"
+                    if report.no_data_vars
+                    else "生成完成，待确认"
+                ),
+            )
             await db.commit()
             logger.info("报告生成完成 id=%d 待确认", report.id)
         except Exception as exc:
@@ -569,6 +610,8 @@ async def regenerate_insight(
             facts_by_ph,
             metrics_by_ph,
             {s: (data.get("text") or "") for s, data in insights.items()},
+            # NO_DATA 变量不在 facts 快照里 -> 必须带上，否则渲染时 KeyError
+            no_data_vars=list(report.no_data_vars or []),
         )
         report.insights_json = insights
         _audit(

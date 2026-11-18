@@ -13,6 +13,8 @@ export const STATUS_LABEL: Record<ReportStatus, string> = {
   pending: '待生成',
   generating: '生成中',
   pending_confirmation: '待确认',
+  /** 「部分成功」：有变量取不到数（文档里填 NO_DATA）但报告已生成（2026-11-18） */
+  partial_success: '部分成功',
   confirmed: '已确认',
   /** 「仅确认不发送」的终态（2026-11-12） */
   confirmed_no_push: '已确认（未发送）',
@@ -35,6 +37,10 @@ export function statusSoftClass(status: ReportStatus): string {
       // 终态但不是「已推送」-> 用 neutral 灰，别用 success 绿（会误导成发出去了）
       return 'neutral'
     case 'pending_confirmation':
+      return 'warning'
+    case 'partial_success':
+      // 部分成功：报告是完整的，但有变量没数据 -> 用 warning（不是 success，
+      // 免得让人以为一切正常）
       return 'warning'
     case 'pushed':
       return 'success'

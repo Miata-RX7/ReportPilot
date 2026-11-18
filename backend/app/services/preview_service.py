@@ -87,6 +87,10 @@ def format_scalar_display(fact: MetricFact, metric: MetricDefinition) -> str:
     return join_value_unit(format_fact_value(float(value), precision), unit)
 
 
+#: 取不到数时填入报告的占位文本（2026-11-18）
+NO_DATA_PLACEHOLDER = "NO_DATA"
+
+
 async def compute_template_facts(
     db: AsyncSession,
     version: TemplateVersion,
@@ -98,9 +102,34 @@ async def compute_template_facts(
 ]:
     """校验绑定并计算某版本模板的全部 metric，返回 (bindings, placeholder->fact, placeholder->metric)。
 
-    - 未绑定的模板变量 -> PreviewError 并列出全部变量名（不静默空串）
-    - 同一数据源只构建一次 Adapter；同一 metric 只计算一次
-    - 任一 metric 计算失败 -> PreviewError 指明变量名
+    任一 metric 计算失败 -> PreviewError（模板页预览要立刻报错，不能生成半成品）。
+    需要「部分成功」降级的场景（报告生成）请用 :func:`compute_template_facts_ex`。
+    """
+    bindings, facts_by_ph, metrics_by_ph, _no_data = await compute_template_facts_ex(
+        db, version, period, allow_no_data=False
+    )
+    return bindings, facts_by_ph, metrics_by_ph
+
+
+async def compute_template_facts_ex(
+    db: AsyncSession,
+    version: TemplateVersion,
+    period: str,
+    *,
+    allow_no_data: bool = False,
+) -> tuple[
+    list[TemplateBinding],
+    dict[str, MetricFact],
+    dict[str, MetricDefinition],
+    list[dict[str, str]],
+]:
+    """同 :func:`compute_template_facts`，但多返回**取不到数的变量清单**。
+
+    ``allow_no_data=True`` 时（**只有报告生成**用）：某个变量算不出数不再
+    抛错，而是记进 no_data_vars 并跳过该占位符 —— 由调用方把它填成
+    NO_DATA，报告继续生成（状态 partial_success）。
+
+    未绑定的模板变量**仍然报错**（那是配置错误，不是数据问题）。
     """
     bindings = list(
         (
@@ -137,6 +166,8 @@ async def compute_template_facts(
         metrics_by_id = {m.id: m for m in rows}
 
     adapters: dict[int, tuple[DataSourceAdapter, str]] = {}
+    #: 取不到数的变量（allow_no_data=True 时才可能非空）
+    no_data_vars: list[dict[str, str]] = []
     facts_by_metric: dict[int, MetricFact] = {}
     facts_by_ph: dict[str, MetricFact] = {}
     metrics_by_ph: dict[str, MetricDefinition] = {}
@@ -162,9 +193,25 @@ async def compute_template_facts(
                     fact.display_precision = metric.display_precision
                 facts_by_metric[metric.id] = fact
             except MetricComputeError as exc:
-                raise PreviewError(
-                    f"变量 {b.placeholder} 计算失败: {exc}"
-                ) from None
+                if not allow_no_data:
+                    raise PreviewError(
+                        f"变量 {b.placeholder} 计算失败: {exc}"
+                    ) from None
+                # 部分成功（2026-11-18）：记录下来，该占位符后面填 NO_DATA
+                no_data_vars.append(
+                    {
+                        "placeholder": b.placeholder,
+                        "metric_name": metric.name,
+                        "reason": str(exc),
+                    }
+                )
+                logger.warning(
+                    "变量取不到数，按 NO_DATA 处理 placeholder=%s metric=%s reason=%s",
+                    b.placeholder,
+                    metric.name,
+                    exc,
+                )
+                continue
             logger.info(
                 "模板指标计算完成 template_id=%d version=%d metric=%s placeholder=%s",
                 version.template_id,
@@ -174,7 +221,7 @@ async def compute_template_facts(
             )
         facts_by_ph[b.placeholder] = facts_by_metric[metric.id]
         metrics_by_ph[b.placeholder] = metric
-    return bindings, facts_by_ph, metrics_by_ph
+    return bindings, facts_by_ph, metrics_by_ph, no_data_vars
 
 
 def collect_facts(facts_by_ph: dict[str, MetricFact]) -> list[MetricFact]:
@@ -248,6 +295,7 @@ def build_context(
     image_factory: Callable[[MetricFact], Any] | None = None,
     summary_texts: dict[str, str] | None = None,
     template_summary_placeholders: list[str] | None = None,
+    no_data_vars: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     """构建渲染 context。insight 槽位文本由调用方注入（槽位 key -> 文本）。
 
@@ -262,8 +310,13 @@ def build_context(
     这里单独注入；没提供就填占位符文字，不会让渲染失败。
     """
     context: dict[str, Any] = {}
+    # 取不到数的变量 -> 填 NO_DATA（2026-11-18）
+    no_data_ph = {d["placeholder"] for d in (no_data_vars or [])}
     for b in bindings:
         if b.binding_type == "metric":
+            if b.placeholder in no_data_ph:
+                context[b.placeholder] = NO_DATA_PLACEHOLDER
+                continue
             fact = facts_by_ph[b.placeholder]
             metric = metrics_by_ph[b.placeholder]
             if fact.value_shape == "text":
