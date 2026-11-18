@@ -193,6 +193,14 @@ export interface UnitScaleConfig {
   decimals?: number | null
 }
 
+/** 指标列表的分页结果（2026-11-18） */
+export interface MetricPage {
+  items: MetricListItem[]
+  total: number
+  page: number
+  page_size: number
+}
+
 export interface MetricDefinitionRead {
   /** 创建人 id（null = 无归属的存量指标） */
   owner_id?: number | null

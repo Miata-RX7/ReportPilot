@@ -735,6 +735,19 @@ class MetricListItem(MetricDefinitionRead):
     owner_name: str | None = None
 
 
+class MetricPage(BaseModel):
+    """指标列表的分页结果（2026-11-18）。
+
+    列表页改用后端分页 —— 之前是一次拉全量、再由前端本地切片，导致后端
+    要为**全部**指标解析名称（102 个指标实测 89 秒，前端直接超时）。
+    """
+
+    items: list[MetricListItem] = []
+    total: int = 0
+    page: int = 1
+    page_size: int = 10
+
+
 class MetricDetail(MetricDefinitionRead):
     query_config_resolved: QueryConfigResolved | None = None
     #: 计算型指标：依赖里已失效的那些（空 = 依赖都还在）。2026-11-17

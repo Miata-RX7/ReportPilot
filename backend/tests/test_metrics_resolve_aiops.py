@@ -219,8 +219,17 @@ class TestResolveMany:
         assert len(adapter.resolve_calls[0]["keys"]) == 25
 
     @pytest.mark.asyncio
-    async def test_distinct_host_sets_are_resolved_separately(self, patched) -> None:
-        """下级集合不同才需要多次调用；相同就合并。"""
+    async def test_same_model_is_resolved_in_one_call(self, patched) -> None:
+        """**同一个上级**（模型/主机组）下的指标合并成**一次**调用。
+
+        2026-11-18 改的：原先按「精确下级集合」分桶，实例组合千差万别 ->
+        桶数 ~= 指标数 -> 每个桶一次 list_hosts + list_items，而 list_items 的
+        缓存 key 含 host_ids 列表（不同桶不共享）-> 全部回源。实测 102 个指标
+        要 89 秒。改成按上级分桶后 RPC 数与指标数**无关**。
+
+        合并不影响正确性：``resolve_scoped_items`` 严格按传入 keys 的顺序返回，
+        而 keys 的顺序没变（只是 lower_ids 变多了）。
+        """
         adapter = patched(_FakeAdapter(aiops=True))
         metrics = [
             _Metric(
@@ -235,4 +244,5 @@ class TestResolveMany:
             for i in range(3)
         ]
         await _resolve_many(None, metrics)  # type: ignore[arg-type]
-        assert len(adapter.resolve_calls) == 3
+        # 3 个指标 / 3 个实例，但同一个模型 -> 只打 1 次
+        assert len(adapter.resolve_calls) == 1

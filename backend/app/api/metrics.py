@@ -25,6 +25,7 @@ from app.schemas.metric import (
     MetricDetail,
     MetricFact,
     MetricListItem,
+    MetricPage,
     MetricUpdate,
     QueryConfigResolved,
     ResolvedGroup,
@@ -241,11 +242,18 @@ async def _resolve_many(
         upper_label = "模型" if is_aiops else "主机组"
         lower_label = "实例" if is_aiops else "主机"
 
-        # 按「下级集合」分桶：同一批主机/实例的指标合并成**一次** resolve_scoped_items。
-        # 若放在「每个指标一次」里，N 个指标就是 N×(list_hosts + list_items) 次 RPC，
-        # 列表页会明显变慢（曾实测 4.4kB 响应要 2.7 秒）。
-        # 上级取桶内所有指标的并集：这里只做名称回填、不承担配置校验
-        # （真正的取数校验在 calc_engine 里），放宽一格换取 RPC 数与指标数无关。
+        # 按「**上级集合**」分桶：同一主机组/模型下的指标合并成**一次**
+        # resolve_scoped_items。
+        #
+        # 早先按「精确下级主机集合」分桶，看着粒度更细、返回更少，实测反而更慢：
+        # 指标组合千差万别 -> 桶数 ~= 指标数 -> 每个桶一次 list_hosts + list_items，
+        # 而 list_items 的缓存 key 含 host_ids 列表（不同桶不共享）-> 全部回源。
+        # 实测 102 个指标（含停用）要 89 秒（2026-11-18）。
+        #
+        # 改成按上级分桶后，RPC 数与指标数**无关**（同组只打一次），
+        # list_items 一次拿回该组全部主机的 item，本地再匹配 keys。
+        # 这里只做名称回填、不承担配置校验（真正的取数校验在 calc_engine 里），
+        # 放宽一格换取 RPC 数与指标数无关。
         buckets: dict[tuple[str, ...], dict[str, list[str]]] = {}
         per_metric: dict[int, tuple[list[str], list[str], list[str]]] = {}
         for m in group_metrics:
@@ -263,10 +271,14 @@ async def _resolve_many(
             per_metric[m.id] = (gids, hids, keys)
             if not keys:
                 continue
-            slot = buckets.setdefault(tuple(hids), {"upper": [], "keys": []})
+            # 桶 key = 上级（主机组/模型）集合 —— 不是精确的主机集合（见上方注释）
+            slot = buckets.setdefault(tuple(sorted(gids)), {"upper": [], "keys": [], "lower": []})
             for g in gids:
                 if g not in slot["upper"]:
                     slot["upper"].append(g)
+            for h in hids:
+                if h not in slot["lower"]:
+                    slot["lower"].append(h)
             for k in keys:
                 if k not in slot["keys"]:
                     slot["keys"].append(k)
@@ -275,9 +287,10 @@ async def _resolve_many(
 
         # 上级名称与各桶的取数对象**并发**取：它们互不依赖，串行等待是纯粹的浪费。
         # 整体套一个 Semaphore，避免数据源与桶数很多时瞬间把上游打满。
-        async def do_bucket(hids: tuple[str, ...], slot: dict[str, list[str]]):
+        async def do_bucket(_key: tuple[str, ...], slot: dict[str, list[str]]):
+            # 下级取桶内所有指标的主机并集（一次拉回，本地再按 keys 匹配）
             return await adapter.resolve_scoped_items(
-                upper_ids=slot["upper"], lower_ids=list(hids), keys=slot["keys"]
+                upper_ids=slot["upper"], lower_ids=slot["lower"], keys=slot["keys"]
             )
 
         sem = asyncio.Semaphore(_RESOLVE_CONCURRENCY)
@@ -451,6 +464,66 @@ async def list_metrics(
         )
         for m in visible
     ]
+
+
+@router.get("/paged", response_model=MetricPage)
+async def list_metrics_paged(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=10, ge=1, le=200),
+    include_inactive: bool = False,
+    q: str = Query(default="", description="名称模糊搜索（大小写不敏感）"),
+    status: str = Query(default="active", description="active / inactive / all"),
+    tag: list[str] = Query(default=[]),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> MetricPage:
+    """**分页**列出指标（列表页用）。
+
+    与 ``GET /api/metrics`` 的区别：这里只查当前页、并**只解析当前页**的名称。
+    全量版仍保留给「模板绑定页」等需要一次拿到全部可见指标的调用方。
+
+    放在 ``/{metric_id}`` 之前注册 —— 否则 "paged" 会被当成 metric_id。
+    """
+    stmt = select(MetricDefinition).order_by(MetricDefinition.id)
+    # 状态筛选：active / inactive / all（默认 active）
+    if status == "active":
+        stmt = stmt.where(MetricDefinition.is_active.is_(True))
+    elif status == "inactive":
+        stmt = stmt.where(MetricDefinition.is_active.is_(False))
+    # 名称模糊搜索
+    keyword = q.strip()
+    if keyword:
+        stmt = stmt.where(MetricDefinition.name.ilike(f"%{keyword}%"))
+    for i, t in enumerate(tag):
+        cleaned = t.strip()
+        if cleaned:
+            stmt = _tag_filter(stmt, db, cleaned, i)
+    all_rows = list((await db.scalars(stmt)).all())
+    visible = [m for m in all_rows if ownership.metric_visible_to(m, current_user)]
+    total = len(visible)
+    start = (page - 1) * page_size
+    page_rows = visible[start : start + page_size]
+    if not page_rows:
+        return MetricPage(items=[], total=total, page=page, page_size=page_size)
+
+    resolved = await _resolve_many(db, page_rows)
+    owner_names = await _owner_name_map(
+        db, {m.owner_id for m in page_rows if m.owner_id}
+    )
+    from app.services.metric_deps import broken_dependencies_of
+
+    broken = await broken_dependencies_of(db, page_rows)
+    items = [
+        MetricListItem(
+            **_to_read(m).model_dump(),
+            query_config_resolved=resolved.get(m.id),
+            owner_id=m.owner_id,
+            owner_name=owner_names.get(m.owner_id) if ownership.is_admin(current_user) else None,
+            broken_deps=broken.get(m.id, []),
+        )
+        for m in page_rows
+    ]
+    return MetricPage(items=items, total=total, page=page, page_size=page_size)
 
 
 @router.get("/{metric_id}", response_model=MetricDetail)

@@ -6,10 +6,28 @@ import type {
   MetricDetail,
   MetricFact,
   MetricListItem,
+  MetricPage,
 } from './types'
 
 export const metricApi = {
   /** 列表：tags 传入按 AND 精确匹配（后端 jsonb 包含查询） */
+  /** 分页列出指标（列表页用）。全量 list() 留给模板绑定页。 */
+  paged(params: {
+    page?: number
+    page_size?: number
+    q?: string
+    status?: 'active' | 'inactive' | 'all'
+    tag?: string[]
+  }) {
+    const q: Record<string, unknown> = {}
+    if (params.page) q.page = params.page
+    if (params.page_size) q.page_size = params.page_size
+    if (params.q) q.q = params.q
+    if (params.status) q.status = params.status
+    if (params.tag?.length) q.tag = params.tag
+    return http.get<MetricPage>('/metrics/paged', { params: q })
+  },
+
   list(tags?: string[], includeIds?: number[]) {
     const params: Record<string, unknown> = {}
     if (tags?.length) params.tag = tags
