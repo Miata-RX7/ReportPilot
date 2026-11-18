@@ -63,11 +63,13 @@ ALLOWED_ACTIONS: dict[str, set[str]] = {
     "pending": {"claim"},
     "generating": {"generate_ok", "generate_fail", "generate_partial"},
     # 「部分成功」：有变量取不到数（被填成 NO_DATA）但报告已生成（2026-11-18）。
-    # 后续动作与 pending_confirmation 相同 —— 报告是完整的，只是部分位置无数据。
+    #
+    # **只允许「仅确认不发送」**（+ 重发确认链接）：
+    # 报告是完整的（确认人照样能打开预览、下载 Word），但里面有 NO_DATA，
+    # 不适合直接推给最终收件人 —— 让确认人自己看过、线下处理完再发。
+    # 所以这里**不给** confirm / confirm_by_admin（那两个都会触发推送）。
     "partial_success": {
-            "confirm",
             "confirm_only",
-            "confirm_by_admin",
             "resend_confirmation",
         },
     "pending_confirmation": {

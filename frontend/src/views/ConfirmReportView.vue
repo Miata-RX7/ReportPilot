@@ -16,6 +16,14 @@ const preview = ref<ConfirmPreview | null>(null)
 
 /** 部分成功：本期取不到数、被填成 NO_DATA 的变量（2026-11-18） */
 const noDataVars = computed(() => preview.value?.no_data_vars ?? [])
+
+/**
+ * 部分成功 -> **不给「确认并发送」**，只让确认人「仅确认不发送」。
+ *
+ * 报告是完整的（照样能预览、下载 Word），但里面有 NO_DATA，不适合直接推给
+ * 最终收件人 —— 让确认人自己看过、线下处理完再发（2026-11-18）。
+ */
+const isPartial = computed(() => preview.value?.status === 'partial_success')
 const result = ref<ConfirmResult | null>(null)
 const loading = ref(true)
 const confirming = ref(false)
@@ -611,8 +619,19 @@ onMounted(load)
   </div>
 </div>
 
+      <!-- 部分成功：不给「确认并发送」（会推给最终收件人），只留「仅确认不发送」 -->
+      <el-alert
+        v-if="isPartial"
+        type="warning"
+        show-icon
+        :closable="false"
+        class="partial-hint"
+        title="本期部分变量无数据（已替换为 NO_DATA），不能直接发送给最终收件人"
+        description="请先下载报告核对，确认无误后点「仅确认不发送」结束本轮任务，由您线下处理发送。"
+      />
       <div class="confirm-actions__buttons">
       <el-button
+      v-if="!isPartial"
       plain
             type="primary"
             size="large"
@@ -639,6 +658,10 @@ onMounted(load)
 </template>
 
 <style scoped lang="scss">
+/* 部分成功：提示条 + 无数据变量明细（2026-11-18） */
+.partial-hint {
+  margin-bottom: 12px;
+}
 /* 部分成功：无数据变量明细（2026-11-18） */
 .no-data-list {
   font-size: 13px;
