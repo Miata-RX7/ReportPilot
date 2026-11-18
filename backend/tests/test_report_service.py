@@ -69,14 +69,20 @@ class TestStateMachineTable:
     def test_pushed_is_terminal(self) -> None:
         assert ALLOWED_ACTIONS["pushed"] == set()
 
-    def test_partial_success_allows_confirmation_flow(self) -> None:
-        """部分成功的报告仍要走完整确认流程（只是提醒确认人哪些变量无数据）。"""
+    def test_partial_success_allows_only_confirm_without_push(self) -> None:
+        """部分成功：**只允许「仅确认不发送」**，不允许确认后推给收件人。
+
+        报告是完整的（确认人能打开预览、下载 Word），但里面有 NO_DATA，
+        不适合直接推给最终收件人 -> confirm / confirm_by_admin 都不给
+        （那两个都会触发推送）。
+        """
         assert ALLOWED_ACTIONS["partial_success"] == {
-            "confirm",
             "confirm_only",
-            "confirm_by_admin",
             "resend_confirmation",
         }
+        # 明确断言「不能发送」
+        assert "confirm" not in ALLOWED_ACTIONS["partial_success"]
+        assert "confirm_by_admin" not in ALLOWED_ACTIONS["partial_success"]
 
     def test_allowed_actions_per_status(self) -> None:
         assert ALLOWED_ACTIONS["pending"] == {"claim"}

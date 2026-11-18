@@ -50,7 +50,10 @@ def _state_of(report: Report, token: str) -> tuple[str, str | None]:
         return "used", "该链接已使用"
     if not token_matches(token, report.confirmation_token):
         return "invalid", "确认链接无效"
-    if report.status != "pending_confirmation":
+    # partial_success（2026-11-18）**允许打开确认页** —— 报告是完整的，
+    # 只是部分变量无数据（填了 NO_DATA）。确认人至少要能拿到这个半成品：
+    # 预览、下载 Word、必要时线下自己改完再发。
+    if report.status not in ("pending_confirmation", "partial_success"):
         return "invalid", f"当前状态（{report.status}）不支持确认"
     expires = report_service._aware(report.expires_at)
     if expires is not None and expires < datetime.now(timezone.utc):
