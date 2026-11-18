@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models.report import Report
+from app.models.template import TemplateVersion, WordTemplate
 from app.schemas.report import (
     ConfirmPreview,
     ConfirmRequest,
@@ -23,6 +24,7 @@ from app.schemas.report import (
     SummaryDraftRead,
 )
 from app.services import report_service, report_summary_service
+from app.services.docx_renderer import is_summary_placeholder
 from app.services.report_service import ReportError
 from app.services.report_summary_service import SummaryError
 from app.services.task_service import token_matches
