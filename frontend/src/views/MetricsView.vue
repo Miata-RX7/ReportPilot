@@ -125,32 +125,35 @@ const dsMap = computed(() => new Map(dataSources.value.map((d) => [d.id, d.name]
 /* ---- 顶部搜索 ---- */
 const tagFilter = ref<string[]>([])
 const nameFilter = ref('')
+// 空 = 全部（active + inactive）；后端 status 参数取 active/inactive/all
 const statusFilter = ref<'' | 'active' | 'inactive'>('')
 const allTags = ref<string[]>([])
-/*分页：后端列表接口返回全量（当前量级几十条），前端切片即可，不改 API 契约 */
+/*分页：**后端分页**（2026-11-18）。
+ *
+ * 之前是「后端返回全量 + 前端本地切片」——后端要为**全部**指标解析名称
+ * （主机名 / 监控项名，每批要打 Zabbix API），102 个指标实测 89 秒，
+ * 前端直接超时。改成后端分页后只解析当前页。
+ *
+ * 筛选（名称 / 状态 / 标签）也一并交给后端 —— 否则筛选只作用于当前页，
+ * 总数会和实际不符。
+ */
 const page = ref(1)
 const pageSize = ref(10)
+/** 后端返回的总条数 */
+const total = ref(0)
 
-const pagedRows = computed(() => {
-  const list = visibleRows.value
-  const start = (page.value - 1) * pageSize.value
-  return list.slice(start, start + pageSize.value)
-})
-
-const visibleRows = computed(() =>
-  rows.value.filter((r) => {
-    if (nameFilter.value && !r.name.toLowerCase().includes(nameFilter.value.trim().toLowerCase())) {
-      return false
-    }
-    if (statusFilter.value === 'active' && !r.is_active) return false
-    if (statusFilter.value === 'inactive' && r.is_active) return false
-    return true
-  }),
-)
+/** 当前页的数据（后端已筛好） */
+const pagedRows = computed(() => rows.value)
 
 // 筛选条件变化后要把页码收回第一页，否则可能停在超出范围的页码上（列表看起来是空的）
 watch([nameFilter, statusFilter, tagFilter], () => {
   page.value = 1
+  void load()
+})
+
+// 翻页 / 改每页条数 -> 重新向后端取
+watch([page, pageSize], () => {
+  void load()
 })
 
 /* ---- 新增/编辑弹窗 ---- */
@@ -477,8 +480,18 @@ const rules = computed<FormRules>(() => ({
 async function load() {
   loading.value = true
   try {
-    const [m, ds] = await Promise.all([metricApi.list(tagFilter.value), dataSourceApi.list()])
-    rows.value = m.data
+    const [m, ds] = await Promise.all([
+      metricApi.paged({
+        page: page.value,
+        page_size: pageSize.value,
+        q: nameFilter.value.trim(),
+        status: statusFilter.value || 'all',
+        tag: tagFilter.value,
+      }),
+      dataSourceApi.list(),
+    ])
+    rows.value = m.data.items
+    total.value = m.data.total
     dataSources.value = ds.data.filter((d) => d.is_active)
     const tags = new Set<string>()
     rows.value.forEach((r) => r.tags?.forEach((t) => tags.add(t)))
@@ -1765,7 +1778,7 @@ onMounted(load)
           :loading="loading"
           empty-text="暂无指标，点击右上角新增"
           pagination
-          :total="visibleRows.length"
+          :total="total"
           :page="page"
           :page-size="pageSize"
           selection
