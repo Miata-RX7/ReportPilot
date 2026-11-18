@@ -13,6 +13,8 @@ ReportStatus = Literal[
     "pending",
     "generating",
     "pending_confirmation",
+    # 「部分成功」：有变量取不到数（文档里填 NO_DATA）但报告已生成（2026-11-18）
+    "partial_success",
     "confirmed",
     # 「仅确认不发送」的终态（2026-11-12）
     "confirmed_no_push",
@@ -53,6 +55,8 @@ class ReportRead(BaseModel):
     file_path: str | None
     last_error: str | None
     error_stage: str | None
+    #: 本期取不到数、被填成 NO_DATA 的变量（部分成功，2026-11-18）
+    no_data_vars: list[dict[str, Any]] = []
     confirmation_sent_at: datetime | None
     expires_at: datetime | None
     confirmed_at: datetime | None
