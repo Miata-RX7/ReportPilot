@@ -28,7 +28,7 @@ import {
 import { downloadBlob, filenameFromDisposition } from '@/utils/download'
 import { parseApiError } from '@/utils/error'
 import { useAuthStore } from '@/stores/auth'
-import { formatDateTime, periodLabel, previousPeriod, previousWeek } from '@/utils/format'
+import { formatDateTime, periodLabel } from '@/utils/format'
 
 const rows = ref<ReportTaskRead[]>([])
 const auth = useAuthStore()
@@ -45,8 +45,9 @@ const form = reactive({
   template_id: null as number | null,
   cron_expr: '0 9 1 * *',
   cron_preset: '0 9 1 * *',
-  // 统计周期：current=本期（触发时刻所在周期）/ last_week=上周 / last_month=上月
-  period_preset: 'current',
+  // 统计周期：this_week=本周（按触发时间）/ this_month=本月（按触发时间）
+  //           / last_week=上周 / last_month=上月
+  period_preset: 'this_month',
   confirmer_email: '',
   recipient_emails: [] as string[],
   is_active: true,
@@ -54,7 +55,9 @@ const form = reactive({
 
 /** 统计周期预设 -> 后端 (period_granularity, period_offset) */
 const PERIOD_PRESETS = [
-  { value: 'current', label: '本期（按触发时间）', granularity: 'month', offset: 0 },
+  // 「按触发时间」= 取**触发时刻所在**的那个周/月（offset 0）
+  { value: 'this_week', label: '本周（按触发时间）', granularity: 'week', offset: 0 },
+  { value: 'this_month', label: '本月（按触发时间）', granularity: 'month', offset: 0 },
   { value: 'last_week', label: '上周', granularity: 'week', offset: -1 },
   { value: 'last_month', label: '上月', granularity: 'month', offset: -1 },
 ] as const
@@ -62,13 +65,19 @@ const PERIOD_PRESETS = [
 type PeriodPreset = (typeof PERIOD_PRESETS)[number]['value']
 
 const periodHint = computed(() => {
+  if (form.period_preset === 'this_week') {
+    return '取**触发时刻所在的这一周**（周一 ~ 周日），按周报生成'
+  }
+  if (form.period_preset === 'this_month') {
+    return '取**触发时刻所在的这个月**，按月报生成'
+  }
   if (form.period_preset === 'last_week') {
     return '取上一个完整自然周（周一 ~ 周日），按周报生成'
   }
   if (form.period_preset === 'last_month') {
     return '取上一个完整自然月，按月报生成'
   }
-  return '取触发时刻所在的统计周期（等同升级前的默认行为）'
+  return ''
 })
 
 function periodRuleOf(preset: string) {
@@ -80,16 +89,15 @@ function periodRuleOf(preset: string) {
 function presetOf(row: ReportTaskRead): PeriodPreset {
   const granularity = row.period_granularity ?? 'month'
   const offset = row.period_offset ?? 0
-  if (granularity === 'week' && offset === -1) return 'last_week'
-  if (granularity === 'month' && offset === -1) return 'last_month'
-  return 'current'
+  if (granularity === 'week') return offset === -1 ? 'last_week' : 'this_week'
+  return offset === -1 ? 'last_month' : 'this_month'
 }
 
 /** 任务列表里统计周期的人读描述：如 "月报 · 本期" / "周报 · 上周" */
 function periodKindText(row: ReportTaskRead): string {
   const kind = (row.period_granularity ?? 'month') === 'week' ? '周报' : '月报'
   const preset = presetOf(row)
-  const label = PERIOD_PRESETS.find((p) => p.value === preset)?.label ?? '本期'
+  const label = PERIOD_PRESETS.find((p) => p.value === preset)?.label ?? '本月'
   return `${kind} · ${label.replace('（按触发时间）', '')}`
 }
 
@@ -112,7 +120,7 @@ function openCreate() {
   form.template_id = activeTemplates.value[0]?.id ?? null
   form.cron_expr = '0 9 1 * *'
   form.cron_preset = '0 9 1 * *'
-  form.period_preset = 'current'
+  form.period_preset = 'this_month'
   form.confirmer_email = ''
   form.recipient_emails = []
   form.is_active = true
@@ -331,14 +339,25 @@ async function downloadReport(id: number, period: string) {
   ElMessage.success('报告已下载')
 }
 
-/** 空态里直接生成一份（等价于"手动触发"，周期=上一个统计周期，按任务粒度取整月/整周） */
+/**
+ * 空态里直接生成一份（等价于"手动触发"）。
+ *
+ * **不传 period** —— 让后端按任务配置的粒度/偏移派生（run 接口的 period 可选）：
+ * 「本周/本月（按触发时间）」-> 触发时刻所在的周/月；「上周/上月」-> 上一期。
+ *
+ * 之前这里硬编码 previousWeek()/previousPeriod()，**无视 period_offset** ——
+ * 「本月（按触发时间）」的任务手动触发时也会拿到上一个月（2026-11-19）。
+ */
 async function generateFirst() {
   if (!historyTask.value) return
-  const period =
-    historyTask.value.period_granularity === 'week' ? previousWeek() : previousPeriod()
   try {
-    await reportTaskApi.run(historyTask.value.id, period)
-    ElMessage.success(`已触发生成（周期 ${periodLabel(period)}），稍后刷新查看`)
+    const { data } = await reportTaskApi.run(historyTask.value.id)
+    const period = data?.period
+    ElMessage.success(
+      period
+        ? `已触发生成（周期 ${periodLabel(period)}），稍后刷新查看`
+        : '已触发生成，稍后刷新查看',
+    )
     historyVisible.value = false
     await load()
   } catch (error) {
