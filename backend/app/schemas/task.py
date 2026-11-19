@@ -102,3 +102,7 @@ class ReportTaskRunResult(BaseModel):
     report_id: int | None = None
     status: Literal["created", "skipped"]
     reason: str | None = None
+    #: 本次实际使用的统计周期（YYYY-MM / YYYY-Www）。
+    #: 手动触发时按任务的粒度/偏移派生，前端据此告诉用户生成了哪一期
+    #: （2026-11-19）。
+    period: str | None = None

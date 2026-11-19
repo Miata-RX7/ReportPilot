@@ -246,4 +246,15 @@ async def run_task(
             status="skipped",
             reason="任务已停用、已被其它实例认领，或该触发时刻已有实例",
         )
-    return ReportTaskRunResult(report_id=report_id, status="created")
+    # 回查**实际使用的周期**（周期是在 run_task_instance 内部按任务的
+    # 粒度/偏移派生的）—— 前端据此告诉用户生成了哪一期（2026-11-19）。
+    actual_period: str | None = None
+    try:
+        async with AsyncSessionLocal() as db:
+            rep = await db.get(Report, report_id)
+            actual_period = rep.period if rep is not None else None
+    except Exception:  # 回查失败不影响触发结果
+        logger.warning("回查报告周期失败 report=%d", report_id, exc_info=True)
+    return ReportTaskRunResult(
+        report_id=report_id, status="created", period=actual_period
+    )

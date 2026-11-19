@@ -741,6 +741,8 @@ export interface ReportTaskRunResult {
   report_id: number | null
   status: 'created' | 'skipped'
   reason?: string | null
+  /** 本次实际使用的统计周期（2026-11-19） */
+  period?: string | null
 }
 
 // --------------------------------------------------------------------------
