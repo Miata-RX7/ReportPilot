@@ -189,16 +189,6 @@ const grantsVisible = ref(false)
 const grantsRow = ref<TemplateListItem | null>(null)
 
 /** 下拉选项文案：图表类型标注类型，并对不可绑定的目标给出原因 */
-/**
- * 可见范围内的指标名计数 —— 用来判断某个名字是否**同名有多个**。
- * 同名时（跨创建人）下拉里要带创建人，否则用户分不清是哪一个。
- */
-const metricNameCounts = computed(() => {
-  const m = new Map<string, number>()
-  for (const x of metrics.value) m.set(x.name, (m.get(x.name) ?? 0) + 1)
-  return m
-})
-
 function metricOptionLabel(
   m: {
     name: string
@@ -211,12 +201,14 @@ function metricOptionLabel(
   const typeText = { curve: '曲线图', pie: '饼图', scalar: '数值', text: '文本' }[
     m.metric_type ?? 'scalar'
   ] ?? m.metric_type
-  // **同名（跨创建人）时带创建人** —— 不同用户可以建同名指标（2026-11-17），
-  // 不带创建人就分不清是哪一个了。
-  const ownerSuffix =
-    (metricNameCounts.value.get(m.name) ?? 0) > 1 && m.owner_name
-      ? `·${m.owner_name}`
-      : ''
+  // **创建人后缀**（2026-11-19）：
+  //
+  // - 后端**只在 admin 请求时**填充 owner_name（普通用户恒为 None），
+  //   所以这里「有就显示」就自动区分了两个视角：
+  //     · admin  -> 每个候选都带「·创建人」，一眼知道这指标是谁的
+  //     · 普通用户 -> 拿不到 owner_name -> 不带后缀（维持原样）
+  // - 不同用户可以建同名指标（2026-11-17），admin 视角下尤其需要区分。
+  const ownerSuffix = m.owner_name ? `·${m.owner_name}` : ''
   // 已删除（软停用）的指标**只展示、不可选** —— 用户仍能看到「这个变量绑的是
   // 哪个（已删的）指标」，但不能把它选给别的变量。
   if (m.is_active === false) {
