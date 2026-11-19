@@ -41,8 +41,35 @@ const stateText = computed(() => {
       return null
     case 'expired':
       return { title: '确认链接已过期', desc: preview.value?.message ?? '请联系管理员重新发送确认邮件' }
-    case 'used':
-      return { title: '该链接已使用', desc: preview.value?.message ?? '如需重新推送请联系管理员' }
+    case 'used': {
+      // 按报告实际状态给不同标题 —— 之前标题和副标题都是「该链接已使用」，
+      // 确认人刚点完「仅确认不发送」再打开会以为操作失败了（2026-11-19）。
+      const st = preview.value?.status
+      if (st === 'confirmed_no_push') {
+        return {
+          title: '已确认（未发送）',
+          desc:
+            preview.value?.message ??
+            '你已点过「仅确认不发送」——本轮报告已结束，系统不会再发送或催办。',
+        }
+      }
+      if (st === 'pushed') {
+        return {
+          title: '已确认并发送',
+          desc: preview.value?.message ?? '报告已确认并发送给收件人。',
+        }
+      }
+      if (st === 'confirmed') {
+        return {
+          title: '已确认',
+          desc: preview.value?.message ?? '报告已确认（发送中）。',
+        }
+      }
+      return {
+        title: '该链接已使用',
+        desc: preview.value?.message ?? '如需重新推送请联系管理员',
+      }
+    }
     default:
       return { title: '确认链接无效', desc: preview.value?.message ?? '请检查链接是否完整复制' }
   }
