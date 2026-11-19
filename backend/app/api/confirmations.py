@@ -46,7 +46,15 @@ def _state_of(report: Report, token: str) -> tuple[str, str | None]:
     此时用户重复打开链接应看到"该链接已使用"，而不是"状态不支持确认"。
     """
     if report.confirmation_token is None:
-        # 已确认过（token 已清空）——重复打开就是"已使用"
+        # 已确认过（token 已清空）—— 重复打开时**按实际结果**给文案，
+        # 别只说「该链接已使用」：确认人刚点完「仅确认不发送」再打开，
+        # 看到「已使用」会以为操作失败了（2026-11-19）。
+        if report.status == "confirmed_no_push":
+            return "used", "你已点过「仅确认不发送」——本轮报告已结束，系统不会再发送或催办。"
+        if report.status == "pushed":
+            return "used", "报告已确认并发送给收件人。"
+        if report.status == "confirmed":
+            return "used", "报告已确认（发送中）。"
         return "used", "该链接已使用"
     if not token_matches(token, report.confirmation_token):
         return "invalid", "确认链接无效"
