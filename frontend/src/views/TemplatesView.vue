@@ -262,7 +262,8 @@ async function load() {
   loading.value = true
   try {
     const [t, m] = await Promise.all([templateApi.list(), metricApi.list()])
-    rows.value = t.data
+    // 默认只显示启用中的模板（停用的历史模板默认隐藏，admin 可切换）
+    rows.value = showInactive.value ? t.data : t.data.filter((x) => x.is_active !== false)
     metrics.value = m.data.filter((x) => x.is_active)
   } catch (error) {
     ElMessage.error(parseApiError(error).message)
@@ -486,6 +487,14 @@ onMounted(load)
  */
 const selectedTemplates = ref<TemplateListItem[]>([])
 
+/**
+ * 是否显示**已停用**的模板（2026-11-20）。
+ *
+ * 停用模板**不能删** —— 历史报告外键引用着 reports.template_id。默认隐藏，
+ * 免得模板列表里堆着一堆「很早以前」的停用模板；admin 可以打开开关查看。
+ */
+const showInactive = ref(false)
+
 function onSelectionChange(rows: TemplateListItem[]): void {
   selectedTemplates.value = rows
 }
@@ -521,7 +530,16 @@ async function onBatchDelete(): Promise<void> {
   <div class="page-container">
     <PageHeader title="模板管理" description="上传 Word 模板、维护版本、绑定指标/AI 摘要并在线编辑">
       <template #actions>
-        <el-button type="primary" @click="openUpload">上传模板</el-button>
+        <!-- 停用的历史模板默认隐藏（admin 可切换查看）2026-11-20 -->
+      <el-checkbox
+        v-if="auth.isAdmin"
+        v-model="showInactive"
+        class="ml12"
+        @change="load"
+      >
+        显示已停用模板
+      </el-checkbox>
+      <el-button type="primary" @click="openUpload">上传模板</el-button>
       </template>
     </PageHeader>
 

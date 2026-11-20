@@ -620,13 +620,17 @@ onMounted(load)
       >
         <span class="trace-row__name">{{ cat.name }}</span>
         <span class="trace-row__count">{{ cat.count }}</span>
+        <!-- trigger="manual"：**不能**再用 "click"。
+             之前 :visible 受控 + trigger="click" 双重控制 -> 点击时 popover
+             内部又切一次 visible -> @update:visible(false) 把 traceOpenFor
+             清空 -> 弹窗刚开就关（一闪就没）。改为纯手动控制。
+             （2026-11-20） -->
         <el-popover
           :visible="traceOpenFor === `${ph}:${ci}`"
           placement="top"
-          trigger="click"
+          trigger="manual"
           popper-class="trace-bubble"
           :width="260"
-          @update:visible="(v: boolean) => { if (!v) traceOpenFor = '' }"
         >
           <template #reference>
             <el-button link type="primary" @click="toggleTrace(`${ph}:${ci}`)">
