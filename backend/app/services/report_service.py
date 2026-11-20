@@ -1051,8 +1051,11 @@ async def _push_in_session(
         # 确认人上传的原始数据文件作为附加附件（明细在附件里，不进正文）
         from app.services import report_summary_service
 
+        # 附加附件用**上传时的原始文件名**做显示名（report_task_files.filename），
+        # 磁盘上存的是哈希名 —— 直接用 stored_path 的名字会让收件人看到
+        # 「e78d1f1f4cac3bc5_bd7ec3f2.xlsx」这种看不懂的串（2026-11-20）。
         extra_attachments = [
-            Path(f.stored_path)
+            (Path(f.stored_path), f.filename or Path(f.stored_path).name)
             for f in await report_summary_service.list_files(db, report_id)
             if f.stored_path
         ]
