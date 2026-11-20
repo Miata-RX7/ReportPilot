@@ -7,7 +7,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import TypeAdapter, ValidationError
-from sqlalchemy import String, bindparam, cast, select
+from sqlalchemy import String, bindparam, cast, or_, select
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -171,25 +171,38 @@ def _dialect_name(db: AsyncSession) -> str:
     return getattr(getattr(bind, "dialect", None), "name", "")
 
 
-def _tag_filter_or(stmt, db: AsyncSession, tag: str, idx: int = 0):
-    """按标签过滤，**并集**语义（任一命中即保留）。
+def _tag_filter_or(stmt, db: AsyncSession, tags: list[str], base_idx: int = 0):
+    """按**多个**标签过滤，**并集**语义（任一命中即保留）。
 
     与 :func:`_tag_filter`（AND/精确匹配）不同：筛选项是多选控件，用户勾了
     两个标签期望看到「带其中任一标签」的指标，而不是「同时带两个」的
     （后者几乎必然 0 条，看着像筛选没生效）。2026-11-20。
+
+    实现：每个标签生成一个 ``tags @> '["x"]'`` 条件，再用 OR 组合。
+    （**不能**用 PG 的 ``?|`` —— 那个操作符的右值是 text[]，不是 jsonb。）
     """
+    cleaned = [t.strip() for t in tags if t and t.strip()]
+    if not cleaned:
+        return stmt
     if _dialect_name(db) == "postgresql":
-        return stmt.where(
-            MetricDefinition.tags.op("?|")(bindparam(f"tag_{idx}", value=[tag], type_=JSONB))
-        )
-    # 其它方言（SQLite）：文本 LIKE，同时匹配转义形式
+        conds = [
+            MetricDefinition.tags.op("@>")(
+                bindparam(f"tag_{base_idx + i}", value=[tg], type_=JSONB)
+            )
+            for i, tg in enumerate(cleaned)
+        ]
+        return stmt.where(or_(*conds))
+    # 其它方言（SQLite 单测）：文本 LIKE，同时匹配转义形式
     import json as _json
 
-    escaped = _json.dumps(tag, ensure_ascii=True)[1:-1]
-    return stmt.where(
-        MetricDefinition.tags.cast(String).like(f'%"{escaped}"%')
-        | MetricDefinition.tags.cast(String).like(f'%\\u{escaped}%')
-    )
+    conds = []
+    for tg in cleaned:
+        escaped = _json.dumps(tg, ensure_ascii=True)[1:-1]
+        conds.append(
+            MetricDefinition.tags.cast(String).like(f'%"{escaped}"%')
+            | MetricDefinition.tags.cast(String).like(f'%\\u{escaped}%')
+        )
+    return stmt.where(or_(*conds))
 
 
 def _tag_filter(stmt, db: AsyncSession, tag: str, idx: int = 0):
@@ -540,10 +553,19 @@ async def list_metrics_paged(
         stmt = stmt.where(MetricDefinition.name.ilike(f"%{keyword}%"))
     # 标签筛选：**多个标签取并集（任一命中）**（2026-11-20）。
     # 之前是 AND（逐个 where），选两个不同标签就会 0 条 -> 用户以为筛选没生效。
-    for i, t in enumerate(tag):
-        cleaned = t.strip()
-        if cleaned:
-            stmt = _tag_filter_or(stmt, db, cleaned, i)
+    #
+    # 标签**选项**（available_tags）要用**不受 tag 条件影响**的那一份：
+    # 否则选完一个标签后，下拉里只剩它 -> 用户没法改选别的。
+    base_rows = list((await db.scalars(stmt)).all())
+    base_visible = [m for m in base_rows if ownership.metric_visible_to(m, current_user)]
+    tag_set: set[str] = set()
+    for m in base_visible:
+        for tg in (m.tags or []):
+            if tg:
+                tag_set.add(str(tg))
+    available_tags = sorted(tag_set)
+
+    stmt = _tag_filter_or(stmt, db, list(tag))
     all_rows = list((await db.scalars(stmt)).all())
     visible = [m for m in all_rows if ownership.metric_visible_to(m, current_user)]
     total = len(visible)
@@ -551,17 +573,12 @@ async def list_metrics_paged(
     page_rows = visible[start : start + page_size]
     if not page_rows:
         # 空页也要给标签合集（筛选下拉不能因为翻到空页就清空选项）
-        tag_set: set[str] = set()
-        for m in visible:
-            for tg in (m.tags or []):
-                if tg:
-                    tag_set.add(str(tg))
         return MetricPage(
             items=[],
             total=total,
             page=page,
             page_size=page_size,
-            available_tags=sorted(tag_set),
+            available_tags=available_tags,
         )
 
     resolved = await _resolve_many(db, page_rows)
@@ -571,13 +588,6 @@ async def list_metrics_paged(
     from app.services.metric_deps import broken_dependencies_of
 
     broken = await broken_dependencies_of(db, page_rows)
-    # 全部可见指标的标签合集（不是当前页的）—— 筛选下拉的选项要稳定（2026-11-20）
-    tag_set: set[str] = set()
-    for m in visible:
-        for tg in (m.tags or []):
-            if tg:
-                tag_set.add(str(tg))
-    available_tags = sorted(tag_set)
     items = [
         MetricListItem(
             **_to_read(m).model_dump(),
