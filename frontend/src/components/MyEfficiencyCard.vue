@@ -5,32 +5,14 @@
  * 全局卡片给的是「全部任务」的视角；这一张给**当前用户名下**的任务 ——
  * 让每个用户看到自己那部分贡献。
  */
-import { ref } from 'vue'
-import { ElMessage } from 'element-plus'
-import { efficiencyApi } from '@/api/efficiency'
-import type { EfficiencySummary, TaskEfficiencyRead } from '@/api/types'
-import { parseApiError } from '@/utils/error'
+import { computed } from 'vue'
+import { useEfficiency } from '@/composables/useEfficiency'
 
-const summary = ref<EfficiencySummary | null>(null)
-const tasks = ref<TaskEfficiencyRead[]>([])
-const loading = ref(false)
-const failed = ref(false)
+// 同上：与 EfficiencyValueCard 共用同一次请求
+const { data, loading, failed } = useEfficiency()
 
-async function load() {
-  loading.value = true
-  failed.value = false
-  try {
-    const { data } = await efficiencyApi.value()
-    summary.value = data.mine_summary
-    tasks.value = data.mine
-  } catch (error) {
-    failed.value = true
-    ElMessage.error(parseApiError(error).message)
-  } finally {
-    loading.value = false
-  }
-}
-load()
+const summary = computed(() => data.value?.mine_summary ?? null)
+const tasks = computed(() => data.value?.mine ?? [])
 
 function humanMinutes(min: number): string {
   if (!min) return '0 分钟'
