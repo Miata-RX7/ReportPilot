@@ -12,33 +12,15 @@
  * - 执行次数只算成功终态（pushed / confirmed_no_push）
  */
 import { computed, ref } from 'vue'
-import { ElMessage } from 'element-plus'
-import { efficiencyApi } from '@/api/efficiency'
-import type { EfficiencySummary, TaskEfficiencyRead } from '@/api/types'
-import { parseApiError } from '@/utils/error'
+import { useEfficiency } from '@/composables/useEfficiency'
 
-const summary = ref<EfficiencySummary | null>(null)
-const tasks = ref<TaskEfficiencyRead[]>([])
-const loading = ref(false)
-const failed = ref(false)
+// 数据由 useEfficiency 统一取（首页只发一次请求）—— 两个卡片共用同一份
+const { data, loading, failed } = useEfficiency()
+
+const summary = computed(() => data.value?.summary ?? null)
+const tasks = computed(() => data.value?.tasks ?? [])
 /** 口径说明默认折叠 */
 const showBasis = ref(false)
-
-async function load() {
-  loading.value = true
-  failed.value = false
-  try {
-    const { data } = await efficiencyApi.value()
-    summary.value = data.summary
-    tasks.value = data.tasks
-  } catch (error) {
-    failed.value = true
-    ElMessage.error(parseApiError(error).message)
-  } finally {
-    loading.value = false
-  }
-}
-load()
 
 /** 分钟 -> 人性化（小时/天） */
 function humanMinutes(min: number): string {
