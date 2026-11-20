@@ -56,13 +56,17 @@ async def send_report_email(
     report_name: str,
     period: str,
     attachment_path: Path,
-    extra_attachments: list[Path] | None = None,
+    extra_attachments: list[tuple[Path, str]] | None = None,
 ) -> None:
     """发送报告邮件。
 
     ``attachment_path`` 是报告 docx；``extra_attachments`` 是**确认人上传的原始
     数据文件**（明细表放在附件里，不进 Word 正文 —— 200+ 行塞进正文会让文档
     膨胀到几十页）。
+
+    每个附加附件是 ``(磁盘路径, 显示文件名)`` —— 显示名用**上传时的原始文件名**
+    （如「工作内容.xlsx」），不用磁盘上的哈希名，否则收件人看到的是
+    ``e78d1f1f4cac3bc5_bd7ec3f2.xlsx`` 这种看不懂的串（2026-11-20）。
     """
     if not recipients:
         raise MailerError("接收人列表为空")
@@ -75,7 +79,7 @@ async def send_report_email(
     if extra_attachments:
         extra_names = (
             "\n\n随附本期原始数据文件 "
-            + "、".join(p.name for p in extra_attachments)
+            + "、".join(display for _p, display in extra_attachments)
             + "，明细数据请查阅附件。"
         )
     msg.set_content(
@@ -90,7 +94,7 @@ async def send_report_email(
     )
     # 原始数据文件作为附加附件（Excel 的 MIME 类型不好判断，按二进制流发，
     # 收件人的邮件客户端会按扩展名识别）
-    for extra in extra_attachments or []:
+    for extra, display in extra_attachments or []:
         if not extra.exists():
             logger.warning("附加附件不存在，跳过: %s", extra)
             continue
@@ -98,7 +102,9 @@ async def send_report_email(
             extra.read_bytes(),
             maintype="application",
             subtype="octet-stream",
-            filename=extra.name,
+            # 用**原始文件名**做附件名（非 ASCII 走 email 库的 RFC 2231 编码，
+            # 主流邮件客户端都能正确显示中文）
+            filename=display or extra.name,
         )
     try:
         await aiosmtplib.send(msg, **_base_kwargs())
