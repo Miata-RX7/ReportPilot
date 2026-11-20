@@ -3,6 +3,10 @@
  *
  * 之前两个卡片各自调 efficiencyApi.value() -> 首页会发两次相同请求
  * （playwright 实测：/api/efficiency/value × 2）。2026-11-20。
+ *
+ * 注意：不能只用「loaded 布尔」去重 —— 两个组件的 onMounted 几乎同时触发，
+ * 第一个请求还在 await 时 loaded 还是 false -> 第二个也会发出去。
+ * 所以用**共享的 in-flight promise**。
  */
 import { onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
@@ -13,11 +17,12 @@ import { parseApiError } from '@/utils/error'
 const data = ref<EfficiencyValue | null>(null)
 const loading = ref(false)
 const failed = ref(false)
+
 let loaded = false
+let inflight: Promise<void> | null = null
 
 export function useEfficiency() {
-  async function load(force = false) {
-    if (loaded && !force) return
+  async function doLoad(): Promise<void> {
     loading.value = true
     failed.value = false
     try {
@@ -30,6 +35,15 @@ export function useEfficiency() {
     } finally {
       loading.value = false
     }
+  }
+
+  function load(force = false): Promise<void> {
+    if (inflight) return inflight
+    if (loaded && !force) return Promise.resolve()
+    inflight = doLoad().finally(() => {
+      inflight = null
+    })
+    return inflight
   }
 
   onMounted(() => {
