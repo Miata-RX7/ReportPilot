@@ -171,6 +171,27 @@ def _dialect_name(db: AsyncSession) -> str:
     return getattr(getattr(bind, "dialect", None), "name", "")
 
 
+def _tag_filter_or(stmt, db: AsyncSession, tag: str, idx: int = 0):
+    """按标签过滤，**并集**语义（任一命中即保留）。
+
+    与 :func:`_tag_filter`（AND/精确匹配）不同：筛选项是多选控件，用户勾了
+    两个标签期望看到「带其中任一标签」的指标，而不是「同时带两个」的
+    （后者几乎必然 0 条，看着像筛选没生效）。2026-11-20。
+    """
+    if _dialect_name(db) == "postgresql":
+        return stmt.where(
+            MetricDefinition.tags.op("?|")(bindparam(f"tag_{idx}", value=[tag], type_=JSONB))
+        )
+    # 其它方言（SQLite）：文本 LIKE，同时匹配转义形式
+    import json as _json
+
+    escaped = _json.dumps(tag, ensure_ascii=True)[1:-1]
+    return stmt.where(
+        MetricDefinition.tags.cast(String).like(f'%"{escaped}"%')
+        | MetricDefinition.tags.cast(String).like(f'%\\u{escaped}%')
+    )
+
+
 def _tag_filter(stmt, db: AsyncSession, tag: str, idx: int = 0):
     """按标签精确过滤。
 
@@ -517,17 +538,31 @@ async def list_metrics_paged(
     keyword = q.strip()
     if keyword:
         stmt = stmt.where(MetricDefinition.name.ilike(f"%{keyword}%"))
+    # 标签筛选：**多个标签取并集（任一命中）**（2026-11-20）。
+    # 之前是 AND（逐个 where），选两个不同标签就会 0 条 -> 用户以为筛选没生效。
     for i, t in enumerate(tag):
         cleaned = t.strip()
         if cleaned:
-            stmt = _tag_filter(stmt, db, cleaned, i)
+            stmt = _tag_filter_or(stmt, db, cleaned, i)
     all_rows = list((await db.scalars(stmt)).all())
     visible = [m for m in all_rows if ownership.metric_visible_to(m, current_user)]
     total = len(visible)
     start = (page - 1) * page_size
     page_rows = visible[start : start + page_size]
     if not page_rows:
-        return MetricPage(items=[], total=total, page=page, page_size=page_size)
+        # 空页也要给标签合集（筛选下拉不能因为翻到空页就清空选项）
+        tag_set: set[str] = set()
+        for m in visible:
+            for tg in (m.tags or []):
+                if tg:
+                    tag_set.add(str(tg))
+        return MetricPage(
+            items=[],
+            total=total,
+            page=page,
+            page_size=page_size,
+            available_tags=sorted(tag_set),
+        )
 
     resolved = await _resolve_many(db, page_rows)
     owner_names = await _owner_name_map(
@@ -536,6 +571,13 @@ async def list_metrics_paged(
     from app.services.metric_deps import broken_dependencies_of
 
     broken = await broken_dependencies_of(db, page_rows)
+    # 全部可见指标的标签合集（不是当前页的）—— 筛选下拉的选项要稳定（2026-11-20）
+    tag_set: set[str] = set()
+    for m in visible:
+        for tg in (m.tags or []):
+            if tg:
+                tag_set.add(str(tg))
+    available_tags = sorted(tag_set)
     items = [
         MetricListItem(
             **_to_read(m).model_dump(),
@@ -546,7 +588,13 @@ async def list_metrics_paged(
         )
         for m in page_rows
     ]
-    return MetricPage(items=items, total=total, page=page, page_size=page_size)
+    return MetricPage(
+        items=items,
+        total=total,
+        page=page,
+        page_size=page_size,
+        available_tags=available_tags,
+    )
 
 
 @router.get("/{metric_id}", response_model=MetricDetail)

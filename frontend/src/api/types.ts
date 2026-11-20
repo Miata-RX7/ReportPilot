@@ -199,6 +199,8 @@ export interface MetricPage {
   total: number
   page: number
   page_size: number
+  /** 当前可见范围内全部指标的标签合集（不是当前页的） */
+  available_tags?: string[]
 }
 
 export interface MetricDefinitionRead {
@@ -781,4 +783,57 @@ export interface ConfirmResult {
   push_status: 'pushed' | 'push_failed'
   push_error?: string | null
   message: string
+}
+
+
+/** 效率价值：汇总数字（单位：分钟） */
+export interface EfficiencySummary {
+  task_count: number
+  run_count: number
+  total_manual_minutes: number
+  total_platform_minutes: number
+  total_saved_minutes: number
+}
+
+/** 单个任务的效率账 */
+export interface TaskEfficiencyRead {
+  task_id: number
+  task_name: string
+  template_id: number | null
+  template_name: string | null
+  owner_id: number | null
+  owner_name: string | null
+  /** 数值类型指标数 */
+  scalar_count: number
+  /** 曲线图类型指标数 */
+  curve_count: number
+  /** AI 摘要占位符数 */
+  insight_count: number
+  total_metrics: number
+  /** 是否确实上传过 Excel 并生成了 AI 摘要（确认阶段计入的依据） */
+  has_excel_summary: boolean
+  /** 执行次数（只算成功终态） */
+  run_count: number
+  /** 人工做一份要多久（分钟/次） */
+  manual_per_run: number
+  /** 平台一次性配置投入（分钟） */
+  platform_setup: number
+  /** 平台每次执行仍需人工参与（分钟/次） */
+  platform_per_run: number
+  /** 每次执行净节省（分钟） */
+  saved_per_run: number
+  /** 累计净节省（分钟） */
+  total_saved: number
+  /** 盈亏平衡：执行几次才回本 */
+  breakeven_runs: number | null
+  /** 是否是当前用户自己创建的任务 */
+  is_mine: boolean
+}
+
+/** 首页「效率价值」区块数据 */
+export interface EfficiencyValue {
+  summary: EfficiencySummary
+  tasks: TaskEfficiencyRead[]
+  mine: TaskEfficiencyRead[]
+  mine_summary: EfficiencySummary
 }

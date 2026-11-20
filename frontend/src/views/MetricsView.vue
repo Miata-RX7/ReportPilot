@@ -493,9 +493,9 @@ async function load() {
     rows.value = m.data.items
     total.value = m.data.total
     dataSources.value = ds.data.filter((d) => d.is_active)
-    const tags = new Set<string>()
-    rows.value.forEach((r) => r.tags?.forEach((t) => tags.add(t)))
-    allTags.value = [...tags]
+    // 标签选项用**后端给的全部标签**（不是当前页的）—— 之前从当前页收集，
+    // 分页后下拉里的标签会随页变化（选中的标签甚至会消失）（2026-11-20）
+    allTags.value = m.data.available_tags ?? []
   } catch (error) {
     ElMessage.error(parseApiError(error).message)
   } finally {

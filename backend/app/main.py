@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import (
     ad_settings,
+    efficiency,
     ai_calls,
     auth,
     confirmations,
@@ -108,6 +109,10 @@ def create_app() -> FastAPI:
     app.include_router(users.router, prefix="/api/users", tags=["users"])
     app.include_router(system.router, prefix="/api/system", tags=["system"])
     app.include_router(ad_settings.router, prefix="/api/system", tags=["system-ad"])
+    # 效率价值（首页）：按任务展示「人工耗时 vs 平台耗时」的节省（2026-11-20）
+    app.include_router(
+        efficiency.router, prefix="/api/efficiency", tags=["efficiency"]
+    )
 
     @app.get("/api/health")
     async def health() -> dict[str, str]:

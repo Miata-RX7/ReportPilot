@@ -1,6 +1,8 @@
 <script setup lang="ts">
 /** 首页（占位）：内容后续设计，先放入口卡片。 */
 import { useRouter } from 'vue-router'
+import EfficiencyValueCard from '@/components/EfficiencyValueCard.vue'
+import MyEfficiencyCard from '@/components/MyEfficiencyCard.vue'
 
 const router = useRouter()
 
@@ -26,9 +28,13 @@ const entries = [
         type="info"
         show-icon
         :closable="false"
-        title="首页内容待设计，当前仅提供功能入口"
+        title="数据源 → 指标 → 模板 → 报告任务 → 确认人确认 → 邮件推送"
       />
     </el-card>
+
+    <!-- 效率价值（2026-11-20）：按任务展示省下的人工时间 -->
+    <EfficiencyValueCard class="mb16" />
+    <MyEfficiencyCard class="mb16" />
 
     <div class="cards">
       <el-card

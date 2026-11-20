@@ -746,6 +746,9 @@ class MetricPage(BaseModel):
     total: int = 0
     page: int = 1
     page_size: int = 10
+    #: 当前可见范围内**全部**指标的标签合集（2026-11-20）。
+    #: 前端之前从当前页收集标签 -> 分页后下拉里的标签选项会随页变化。
+    available_tags: list[str] = []
 
 
 class MetricDetail(MetricDefinitionRead):
