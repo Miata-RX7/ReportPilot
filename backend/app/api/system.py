@@ -180,6 +180,8 @@ class MailSettingsUpdate(BaseModel):
     smtp_use_tls: bool = False
     app_base_url: str = ""
     smtp_password: str | None = None
+    #: 确认邮件（未确认催办）发送频率：**每 N 小时 1 次**（2026-11-23）
+    reminder_interval_hours: int = Field(default=24, ge=1, le=720)
 
 
 class AiSettingsUpdate(BaseModel):
@@ -281,6 +283,8 @@ async def update_mail_settings(
             "smtp_use_tls": "true" if payload.smtp_use_tls else "false",
             "app_base_url": payload.app_base_url.strip(),
             "smtp_password": _secret_or_none(payload.smtp_password),
+            # 确认邮件发送频率（*小时 1 次）
+            "reminder_interval_hours": str(payload.reminder_interval_hours),
         },
     )
     return _read_model()

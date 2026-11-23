@@ -45,6 +45,8 @@ export interface MailSettingsUpdate {
   smtp_use_tls: boolean
   app_base_url: string
   smtp_password?: string | null
+  /** 确认邮件（未确认催办）发送频率：每 N 小时 1 次（2026-11-23） */
+  reminder_interval_hours?: number
 }
 
 /** AI 集成保存载荷；ai_api_key 留空 / 不传 = 保持原 Key */

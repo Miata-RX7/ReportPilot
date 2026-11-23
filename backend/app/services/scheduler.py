@@ -334,7 +334,12 @@ async def sweep_reminders() -> int:
     """未确认提醒：pending_confirmation 且未过期且距上次提醒 >= 间隔。"""
     from app.services import report_service
 
-    settings = get_settings()
+    # 注意：这里要用**运行时配置**（页面可改），不是纯 .env 的 Settings。
+    # 确认邮件发送频率（reminder_interval_hours）在「运行时配置 / 邮件发送」
+    # 里可调，2026-11-23。
+    from app.services.runtime_config import effective_settings
+
+    settings = effective_settings()
     now = datetime.now(timezone.utc)
     async with AsyncSessionLocal() as db:
         # 用 text() 查询时结果是 Row/标量，取 id 用索引而不是 ORM 属性

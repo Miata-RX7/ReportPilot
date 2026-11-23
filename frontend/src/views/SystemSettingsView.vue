@@ -68,6 +68,8 @@ const mailForm = reactive({
   smtp_from: '',
   smtp_use_tls: false,
   app_base_url: '',
+  // 确认邮件（未确认催办）发送频率：每 N 小时 1 次（2026-11-23）
+  reminder_interval_hours: 24,
 })
 const aiForm = reactive({
   ai_base_url: '',
@@ -83,6 +85,7 @@ function openMailEdit() {
   mailForm.smtp_from = settings.value.smtp_from
   mailForm.smtp_use_tls = settings.value.smtp_use_tls
   mailForm.app_base_url = settings.value.app_base_url
+  mailForm.reminder_interval_hours = settings.value.reminder_interval_hours ?? 24
   // 密码绝不回显：留空即为"不修改"
   mailForm.smtp_password = ''
   mailDialogVisible.value = true
@@ -108,6 +111,7 @@ async function saveMail() {
     smtp_from: mailForm.smtp_from.trim(),
     smtp_use_tls: mailForm.smtp_use_tls,
     app_base_url: mailForm.app_base_url.trim(),
+    reminder_interval_hours: mailForm.reminder_interval_hours,
   }
   // 留空 = 不修改原密码（而不是把密码置空）
   if (mailForm.smtp_password.trim()) payload.smtp_password = mailForm.smtp_password
@@ -782,6 +786,7 @@ onMounted(() => {
                   </el-descriptions-item>
                   <el-descriptions-item label="未确认提醒间隔">
                     {{ settings.reminder_interval_hours }} 小时
+                    <span class="field-hint">在「邮件发送」里修改</span>
                   </el-descriptions-item>
                   <el-descriptions-item label="过期联系邮箱">
                     {{ settings.task_contact_email || '—' }}
@@ -1060,6 +1065,18 @@ onMounted(() => {
             data-testid="mail-form-port"
           />
         </el-form-item>
+        <el-form-item label="确认邮件发送频率">
+          <el-input-number
+            v-model="mailForm.reminder_interval_hours"
+            :min="1"
+            :max="720"
+            :step="1"
+            controls-position="right"
+            class="full-width"
+            data-testid="mail-form-reminder-interval"
+          />
+          <span class="field-hint">每 N 小时发送 1 次确认（催办）邮件，默认 24 小时</span>
+        </el-form-item>
         <el-form-item label="用户名">
           <el-input v-model="mailForm.smtp_username" data-testid="mail-form-username" />
         </el-form-item>
@@ -1205,5 +1222,11 @@ onMounted(() => {
 
 .full-width {
   width: 100%;
+}
+
+.field-hint {
+  margin-left: 8px;
+  font-size: 12px;
+  color: var(--rp-text-muted, #909399);
 }
 </style>

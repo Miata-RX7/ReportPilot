@@ -48,6 +48,10 @@ EDITABLE_KEYS: frozenset[str] = frozenset(
         "ad_sync_enabled",
         "ad_sync_interval_minutes",
         "ad_timeout_seconds",
+        # 确认邮件（未确认催办）的发送频率：*小时 1 次（2026-11-23）
+        # 原来只读 .env（config.py 的默认值 24），改不了；
+        # 搬进运行时配置后可在「系统设置 / 运行时配置 / 邮件发送」里改。
+        "reminder_interval_hours",
     }
 )
 
