@@ -19,6 +19,7 @@ from app.models.metric import MetricDefinition
 from app.models.template import TemplateVersion, WordTemplate
 from app.models.user import User
 from app.schemas.metric import (
+    OwnershipView,
     ComputeRequest,
     MetricCreate,
     MetricDefinitionRead,
@@ -509,6 +510,10 @@ async def list_metrics(
     from app.services.metric_deps import broken_dependencies_of
 
     broken = await broken_dependencies_of(db, visible)
+    # 归属视图（角色组共享，2026-11-23）：让前端能区分「我的」与「角色组共享的」
+    views = await ownership.ownership_views(
+        db, current_user, {m.owner_id for m in visible if m.owner_id}
+    )
     return [
         MetricListItem(
             **_to_read(m).model_dump(),
@@ -518,6 +523,7 @@ async def list_metrics(
             owner_name=owner_names.get(m.owner_id) if ownership.is_admin(current_user) else None,
             # 计算型指标：依赖里已失效的那些（2026-11-17）
             broken_deps=broken.get(m.id, []),
+            ownership=OwnershipView(**views[m.owner_id]) if m.owner_id in views else None,
         )
         for m in visible
     ]
@@ -588,6 +594,10 @@ async def list_metrics_paged(
     from app.services.metric_deps import broken_dependencies_of
 
     broken = await broken_dependencies_of(db, page_rows)
+    # 归属视图（角色组共享，2026-11-23）
+    views = await ownership.ownership_views(
+        db, current_user, {m.owner_id for m in page_rows if m.owner_id}
+    )
     items = [
         MetricListItem(
             **_to_read(m).model_dump(),
@@ -595,6 +605,7 @@ async def list_metrics_paged(
             owner_id=m.owner_id,
             owner_name=owner_names.get(m.owner_id) if ownership.is_admin(current_user) else None,
             broken_deps=broken.get(m.id, []),
+            ownership=OwnershipView(**views[m.owner_id]) if m.owner_id in views else None,
         )
         for m in page_rows
     ]

@@ -13,6 +13,7 @@ from app.models.report import Report
 from app.models.task import ReportTask
 from app.models.template import WordTemplate
 from app.models.user import User
+from app.schemas.metric import OwnershipView
 from app.schemas.task import (
     ReportTaskCreate,
     ReportTaskRead,
@@ -52,7 +53,10 @@ async def _creator_name(
 
 
 async def _read(
-    db: AsyncSession, task: ReportTask, current_user: User | None = None
+    db: AsyncSession,
+    task: ReportTask,
+    current_user: User | None = None,
+    views: dict[int, dict] | None = None,
 ) -> ReportTaskRead:
     """组装读模型（附模板名、收件人数、待确认积压）。
 
@@ -81,6 +85,12 @@ async def _read(
         created_by_name=(
             await _creator_name(db, task.created_by, current_user)
         ),
+        # 归属视图（角色组共享，2026-11-23）；列表里批量算好后传进来
+        ownership=(
+            OwnershipView(**views[task.created_by])
+            if views and task.created_by in views
+            else None
+        ),
         created_at=task.created_at,
         updated_at=task.updated_at,
         last_run_at=task.last_run_at,
@@ -106,7 +116,11 @@ async def list_tasks(
         if scope:
             stmt = stmt.where(ReportTask.created_by.in_(list(scope)))
     tasks = list((await db.scalars(stmt)).all())
-    return [await _read(db, t, current_user) for t in tasks]
+    # 归属视图（角色组共享，2026-11-23）—— 批量算一次，别逐个任务查
+    views = await ownership.ownership_views(
+        db, current_user, {t.created_by for t in tasks if t.created_by}
+    )
+    return [await _read(db, t, current_user, views) for t in tasks]
 
 
 @router.post("", response_model=ReportTaskRead, status_code=201)

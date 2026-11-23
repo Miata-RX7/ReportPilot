@@ -5,6 +5,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
+from app.schemas.metric import OwnershipView
+
 from app.services.period_utils import MAX_PERIOD_OFFSET
 
 

@@ -733,6 +733,21 @@ class MetricListItem(MetricDefinitionRead):
     owner_id: int | None = None
     #: 归属人名字 —— **只有 admin 才会被填充**，普通用户恒为 None
     owner_name: str | None = None
+    #: 归属视图（角色组共享，2026-11-23）
+    ownership: OwnershipView | None = None
+
+
+class OwnershipView(BaseModel):
+    """归属视图（2026-11-23）：让前端能区分「我的」与「角色组共享的」。
+
+    - ``is_own``：资源是我建的
+    - ``shared_by_roles``：通过哪些**角色组**可见（不是自己的那些）
+    - ``read_only``：true = 角色组共享来的，**只读**（编辑/删除要禁用）
+    """
+
+    is_own: bool = True
+    shared_by_roles: list[str] = []
+    read_only: bool = False
 
 
 class MetricPage(BaseModel):

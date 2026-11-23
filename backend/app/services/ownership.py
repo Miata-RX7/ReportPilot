@@ -153,6 +153,85 @@ def ensure_task_editable(task: Any, user: Any) -> None:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "无权操作他人的任务")
 
 
+async def ownership_views(
+    db: Any, user: Any, owner_ids: set[int]
+) -> dict[int, dict[str, Any]]:
+    """批量算归属视图（2026-11-23，阶段 2）。
+
+    返回 ``owner_id -> {is_own, shared_by_roles, read_only}``，让前端能明显
+    区分「我的」与「角色组共享的」。
+
+    - 自己的：``is_own=True``、``read_only=False``
+    - 同角色组成员的：``shared_by_roles`` = **共同的角色组名**、
+      ``read_only=True``（只读）
+    - 不可见的：不出现在结果里
+
+    两次查询搞定（复用「我加入的角色」）：
+    1. 我的角色 id 列表 + 角色名
+    2. 这些角色下的**全部成员**及其所属角色
+    admin 不需要（可见全部且可编辑）-> 返回空 dict。
+    """
+    if not owner_ids:
+        return {}
+    if is_admin(user):
+        return {}
+
+    from sqlalchemy import select
+
+    from app.models.role import Role, RoleMember
+
+    my_role_rows = (
+        await db.execute(
+            select(RoleMember.role_id, Role.name)
+            .join(Role, Role.id == RoleMember.role_id)
+            .where(RoleMember.user_id == user.id)
+        )
+    ).all()
+    my_roles: dict[int, str] = {int(rid): name for rid, name in my_role_rows}
+    if not my_roles:
+        # 没加入任何角色 -> 只有自己的
+        return {
+            oid: {
+                "is_own": oid == user.id,
+                "shared_by_roles": [],
+                "read_only": False,
+            }
+            for oid in owner_ids
+            if oid == user.id
+        }
+
+    peer_rows = (
+        await db.execute(
+            select(RoleMember.user_id, RoleMember.role_id).where(
+                RoleMember.role_id.in_(list(my_roles.keys()))
+            )
+        )
+    ).all()
+    #: owner_id -> 共同角色 id 列表
+    peer_roles: dict[int, list[int]] = {}
+    for uid, rid in peer_rows:
+        peer_roles.setdefault(int(uid), []).append(int(rid))
+
+    out: dict[int, dict[str, Any]] = {}
+    for oid in owner_ids:
+        if oid == user.id:
+            out[oid] = {
+                "is_own": True,
+                "shared_by_roles": [],
+                "read_only": False,
+            }
+            continue
+        common = peer_roles.get(oid, [])
+        if not common:
+            continue  # 不可见
+        out[oid] = {
+            "is_own": False,
+            "shared_by_roles": [my_roles[r] for r in common if r in my_roles],
+            "read_only": True,
+        }
+    return out
+
+
 def owner_names_for_admin(
     owner_ids: set[int], names: dict[int, str], user: Any
 ) -> dict[int, str]:
