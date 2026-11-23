@@ -21,7 +21,7 @@ describe('reportName', () => {
   })
 })
 
-describe('状态机（8 态）', () => {
+describe('状态机（9 态）', () => {
   it('状态标签齐全且无旧状态', () => {
     expect(Object.keys(STATUS_LABEL).sort()).toEqual(
       [
@@ -32,6 +32,8 @@ describe('状态机（8 态）', () => {
         'generating',
         'pending',
         'pending_confirmation',
+        // 「部分成功」：有变量取不到数（填 NO_DATA）但报告已生成（2026-11-18）
+        'partial_success',
         'push_failed',
         'pushed',
       ].sort(),

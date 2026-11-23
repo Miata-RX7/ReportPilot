@@ -10,8 +10,12 @@ import type {
 } from './types'
 
 export const metricApi = {
-  /** 列表：tags 传入按 AND 精确匹配（后端 jsonb 包含查询） */
-  /** 分页列出指标（列表页用）。全量 list() 留给模板绑定页。 */
+  /**
+   * 分页列出指标（列表页用）。全量 list() 留给模板绑定页。
+   *
+   * `tag` 多选为**并集**语义（任一标签命中即显示），由后端 `_tag_filter_or` 实现；
+   * 数组参数的序列化由 http 层的全局 `paramsSerializer` 统一处理。
+   */
   paged(params: {
     page?: number
     page_size?: number
@@ -36,8 +40,8 @@ export const metricApi = {
     if (includeIds?.length) params.include_ids = includeIds
     return http.get<MetricListItem[]>('/metrics', {
       params: Object.keys(params).length ? params : undefined,
-      // 数组序列化为 tag=a&tag=b（默认会变成 tag[]=a，FastAPI 收不到）
-      paramsSerializer: { indexes: null },
+      // 数组参数（tag / include_ids）由 **http 层的全局 paramsSerializer**
+      // 统一序列化成重复 key（tag=a&tag=b），这里不要再单独配。
     })
   },
   /** 详情：附带 query_config_resolved（id -> name） */

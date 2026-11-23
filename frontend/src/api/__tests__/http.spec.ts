@@ -85,3 +85,41 @@ describe('http 拦截器', () => {
     expect(errorToast).toHaveBeenCalledWith('请求超时，请稍后重试')
   })
 })
+
+/**
+ * 数组 query 参数的序列化（2026-11-20）。
+ *
+ * axios 1.x 默认把数组变成 `tag[]=a&tag[]=b`，而 FastAPI 的
+ * `tag: list[str] = Query()` 只认**重复 key**（`tag=a&tag=b`）
+ * -> 后端收到空列表 -> 筛选静默失效（不报错，只是「选了标签列表没变化」）。
+ *
+ * 这条用例就是防那个回归：全局 `paramsSerializer: { indexes: null }`
+ * 被误删时，本用例会红。
+ */
+describe('数组 query 参数序列化', () => {
+  it('数组序列化为重复 key，而不是 tag[]=', () => {
+    const url = http.getUri({
+      url: '/metrics/paged',
+      params: { page: 1, tag: ['蒙古国航', '海油'] },
+    })
+    expect(url).toContain('tag=%E8%92%99%E5%8F%A4%E5%9B%BD%E8%88%AA')
+    expect(url).toContain('tag=%E6%B5%B7%E6%B2%B9')
+    expect(url).not.toContain('tag%5B%5D')
+    expect(url).not.toContain('tag[]')
+  })
+
+  it('标量参数不受影响', () => {
+    const url = http.getUri({
+      url: '/metrics/paged',
+      params: { page: 1, page_size: 10, status: 'all' },
+    })
+    expect(url).toContain('page=1')
+    expect(url).toContain('page_size=10')
+    expect(url).toContain('status=all')
+  })
+
+  it('空数组不产生参数', () => {
+    const url = http.getUri({ url: '/metrics/paged', params: { page: 1, tag: [] } })
+    expect(url).not.toContain('tag')
+  })
+})

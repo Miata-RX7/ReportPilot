@@ -30,6 +30,23 @@ export function setUnauthorizedHandler(handler: () => void): void {
 export const http: AxiosInstance = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL ?? '/api',
   timeout: DEFAULT_TIMEOUT_MS,
+  /**
+   * 数组 query 参数序列化为**重复 key**（`tag=a&tag=b`）。
+   *
+   * axios 1.x 默认把数组变成 `tag[]=a&tag[]=b`（见
+   * `node_modules/axios/lib/helpers/toFormData.js`），而 FastAPI 的
+   * `tag: list[str] = Query()` **只认重复 key** -> 后端收到空列表 ->
+   * 筛选静默失效（表现就是「选了标签但列表没变化」，不报错）。
+   * `indexes: null` 正是 axios 为此提供的开关。
+   *
+   * 放在全局而不是逐个接口加：这次的故障根因就是**局部配置漏加**
+   * （`metrics.list()` 配了、`metrics.paged()` 没配），全局配置一次根治，
+   * 从结构上消除这类人为遗漏。
+   *
+   * 只作用于 GET 的 query 参数；POST 的 JSON body 不经过 `params`，不受影响。
+   * 2026-11-20
+   */
+  paramsSerializer: { indexes: null },
 })
 
 http.interceptors.request.use((config) => {
