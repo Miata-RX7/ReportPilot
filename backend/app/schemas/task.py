@@ -75,6 +75,10 @@ class ReportTaskRead(BaseModel):
     created_by: int | None = None
     #: 创建人名字 —— **只有 admin 才会被填充**
     created_by_name: str | None = None
+    #: 归属视图（角色组共享，2026-11-23）。
+    #: **必须声明** —— Pydantic v2 默认 extra='ignore'，没声明会被**静默丢弃**，
+    #: 表现为「接口层传了 ownership，前端却拿不到」。
+    ownership: OwnershipView | None = None
     name: str
     template_id: int
     template_name: str | None = None

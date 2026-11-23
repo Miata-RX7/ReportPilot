@@ -537,6 +537,11 @@ async def list_metrics_paged(
     q: str = Query(default="", description="名称模糊搜索（大小写不敏感）"),
     status: str = Query(default="active", description="active / inactive / all"),
     tag: list[str] = Query(default=[]),
+    scope: str = Query(
+        default="all",
+        pattern="^(all|mine|shared)$",
+        description="范围筛选：all=全部 / mine=仅我的 / shared=角色组共享的",
+    ),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> MetricPage:
@@ -574,6 +579,16 @@ async def list_metrics_paged(
     stmt = _tag_filter_or(stmt, db, list(tag))
     all_rows = list((await db.scalars(stmt)).all())
     visible = [m for m in all_rows if ownership.metric_visible_to(m, current_user)]
+    # 范围筛选（2026-11-23）：仅我的 / 角色组共享的
+    if scope == "mine":
+        visible = [m for m in visible if m.owner_id == current_user.id]
+    elif scope == "shared":
+        visible = [
+            m
+            for m in visible
+            if m.owner_id != current_user.id
+            and m.owner_id in (ownership.share_scope(current_user) or frozenset())
+        ]
     total = len(visible)
     start = (page - 1) * page_size
     page_rows = visible[start : start + page_size]

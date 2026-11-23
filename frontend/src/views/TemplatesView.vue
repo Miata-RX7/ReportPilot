@@ -18,11 +18,13 @@ import { templateApi } from '@/api/templates'
 import type {
   BindingItem,
   InsightAIConfig,
-  MetricDefinitionRead,
+  MetricListItem,
+  OwnershipInfo,
   TemplateDetail,
   TemplateListItem,
 } from '@/api/types'
 import { parseApiError } from '@/utils/error'
+import { ownershipView } from '@/utils/ownership'
 import {
   MIXED_PLACEHOLDER_HINT,
   bindingProgressClass,
@@ -57,7 +59,7 @@ const pagedRows = computed(() => {
 watch(nameFilter, () => {
   page.value = 1
 })
-const metrics = ref<MetricDefinitionRead[]>([])
+const metrics = ref<MetricListItem[]>([])
 const loading = ref(false)
 
 /* ---- 上传 ---- */
@@ -188,6 +190,32 @@ const versionsRow = ref<TemplateListItem | null>(null)
 const grantsVisible = ref(false)
 const grantsRow = ref<TemplateListItem | null>(null)
 
+/**
+ * 归属标记（角色组共享圈，2026-11-23）。
+ *
+ * 设计要求「创建人 + 归属标记」，这里给出三种形态：
+ * - 自己的 -> `·我的`
+ * - 角色组共享来的 -> `·<创建人 id>·<角色组名>`（多个角色组显示前 2 个 + `+N`）
+ * - 认不出来（admin 视角看不到归属 / 后端还没下发 ownership）-> 空串（维持原样）
+ *
+ * 普通用户拿不到创建人**名字**（后端只对 admin 填 owner_name），只能给 id；
+ * 角色组名才是对方真正认得出的信息，所以两个都给。
+ */
+function ownershipSuffixOf(m: {
+  owner_id?: number | null
+  ownership?: OwnershipInfo | null
+}): string {
+  const view = ownershipView(m, {
+    fallbackIsOwn: m.owner_id != null && m.owner_id === auth.user?.id,
+  })
+  if (view.isOwn) return '·我的'
+  if (!view.shown.length) return ''
+  const names = view.shown.join('、')
+  const rest = view.rest > 0 ? `+${view.rest}` : ''
+  const ownerPart = m.owner_id != null ? `·${m.owner_id}` : ''
+  return `${ownerPart}·${names}${rest}`
+}
+
 /** 下拉选项文案：图表类型标注类型，并对不可绑定的目标给出原因 */
 function metricOptionLabel(
   m: {
@@ -195,6 +223,8 @@ function metricOptionLabel(
     metric_type?: string
     is_active?: boolean
     owner_name?: string | null
+    owner_id?: number | null
+    ownership?: OwnershipInfo | null
   },
   alone: boolean,
 ): string {
@@ -209,15 +239,17 @@ function metricOptionLabel(
   //     · 普通用户 -> 拿不到 owner_name -> 不带后缀（维持原样）
   // - 不同用户可以建同名指标（2026-11-17），admin 视角下尤其需要区分。
   const ownerSuffix = m.owner_name ? `·${m.owner_name}` : ''
+  // **归属标记**（角色组共享圈，2026-11-23）：「我的」/ 角色组名
+  const ownershipSuffix = ownershipSuffixOf(m)
   // 已删除（软停用）的指标**只展示、不可选** —— 用户仍能看到「这个变量绑的是
   // 哪个（已删的）指标」，但不能把它选给别的变量。
   if (m.is_active === false) {
-    return `${m.name}（${typeText}${ownerSuffix}·已删除，不可选）`
+    return `${m.name}（${typeText}${ownerSuffix}${ownershipSuffix}·已删除，不可选）`
   }
   if (!canBindChartMetric(m.metric_type, alone)) {
-    return `${m.name}（${typeText}${ownerSuffix}·需独占段落，此处不可绑定）`
+    return `${m.name}（${typeText}${ownerSuffix}${ownershipSuffix}·需独占段落，此处不可绑定）`
   }
-  return `${m.name}（${typeText}${ownerSuffix}）`
+  return `${m.name}（${typeText}${ownerSuffix}${ownershipSuffix}）`
 }
 
 /** 在模板中展示 {{ var }}（避免在 mustache 里写字面量 } 被编译器截断） */

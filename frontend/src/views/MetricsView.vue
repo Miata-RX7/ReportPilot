@@ -8,6 +8,7 @@ import { confirmDanger, confirmDelete } from '@/components/ConfirmDialog'
 import AiopsScopePicker, { type CascaderSnapshot } from '@/components/AiopsScopePicker.vue'
 import DataTable from '@/components/DataTable.vue'
 import FormDialog from '@/components/FormDialog.vue'
+import OwnershipTag from '@/components/OwnershipTag.vue'
 import PageHeader from '@/components/PageHeader.vue'
 import PeriodPicker from '@/components/PeriodPicker.vue'
 import TestResultAlert from '@/components/TestResultAlert.vue'
@@ -25,6 +26,7 @@ import type {
   MetricFact,
   MetricListItem,
   MetricType,
+  OwnershipInfo,
   PieSuitability,
   QueryConfig,
   QueryConfigResolved,
@@ -68,6 +70,12 @@ import {
   type UnitBase,
 } from '@/utils/metricUnits'
 import { previousPeriod } from '@/utils/format'
+import {
+  ownershipOf,
+  READ_ONLY_TOOLTIP,
+  SCOPE_OPTIONS,
+  type OwnershipScope,
+} from '@/utils/ownership'
 
 const auth = useAuthStore()
 
@@ -89,11 +97,25 @@ const rows = ref<MetricListItem[]>([])
  * 后端早就放开了「所有人可创建指标」，可见性也改成了「只看自己创建的」，
  * 但前端的按钮一直还挂在 `auth.isAdmin` 上 —— 普通用户既建不了、也改不了
  * 自己的指标。这里跟随后端：admin 全部可操作；普通用户只能操作**自己**的。
+ *
+ * 2026-11-23 起多了「角色组（共享圈）」：同角色组成员的指标**只读**，
+ * 编辑仍然只限属主或 admin（`ownership.read_only`）。
  */
-function canEdit(row: { owner_id?: number | null }): boolean {
+function canEdit(row: { owner_id?: number | null; ownership?: OwnershipInfo | null }): boolean {
   if (auth.isAdmin) return true
+  if (ownershipOf(row).read_only) return false
   const me = auth.user?.id
   return !!me && row.owner_id === me
+}
+
+/**
+ * 这一行是不是「角色组共享来的只读行」。
+ *
+ * 后端在 `ownership.read_only` 上给的是**当前用户视角**的结论；
+ * 字段还没下发时按「不是只读」处理（= 旧行为，不会误伤）。
+ */
+function rowReadOnly(row: { ownership?: OwnershipInfo | null } | null | undefined): boolean {
+  return ownershipOf(row).read_only === true
 }
 
 /**
@@ -128,6 +150,13 @@ const nameFilter = ref('')
 // 空 = 全部（active + inactive）；后端 status 参数取 active/inactive/all
 const statusFilter = ref<'' | 'active' | 'inactive'>('')
 const allTags = ref<string[]>([])
+/**
+ * 「范围」筛选（角色组共享圈，2026-11-23）：全部 / 仅我的 / 角色组共享的。
+ *
+ * 对应后端 query 参数 `scope=mine|shared|all`（默认 all）。
+ * 后端还没实现该参数时，多余的 query 参数会被 FastAPI 忽略 —— 不报错。
+ */
+const scopeFilter = ref<OwnershipScope>('all')
 /*分页：**后端分页**（2026-11-18）。
  *
  * 之前是「后端返回全量 + 前端本地切片」——后端要为**全部**指标解析名称
@@ -146,7 +175,7 @@ const total = ref(0)
 const pagedRows = computed(() => rows.value)
 
 // 筛选条件变化后要把页码收回第一页，否则可能停在超出范围的页码上（列表看起来是空的）
-watch([nameFilter, statusFilter, tagFilter], () => {
+watch([nameFilter, statusFilter, tagFilter, scopeFilter], () => {
   page.value = 1
   void load()
 })
@@ -487,6 +516,7 @@ async function load() {
         q: nameFilter.value.trim(),
         status: statusFilter.value || 'all',
         tag: tagFilter.value,
+        scope: scopeFilter.value,
       }),
       dataSourceApi.list(),
     ])
@@ -1757,6 +1787,20 @@ onMounted(load)
         <el-option label="启用" value="active" />
         <el-option label="停用" value="inactive" />
       </el-select>
+      <!-- 范围：全部 / 仅我的 / 角色组共享的（角色组共享圈，2026-11-23） -->
+      <el-select
+        v-model="scopeFilter"
+        placeholder="范围"
+        class="filter-scope"
+        data-testid="scope-filter"
+      >
+        <el-option
+          v-for="o in SCOPE_OPTIONS"
+          :key="o.value"
+          :label="o.label"
+          :value="o.value"
+        />
+      </el-select>
       <!--
         批量删除放在筛选这一行，不单独占一行（用户 2026-10-22 要求）：
         它是针对「当前勾选」的操作，和筛选器同属表格上方的操作区。
@@ -1811,6 +1855,17 @@ onMounted(load)
         </el-table-column>
     <!-- 创建人只有 admin 能看到（后端也只在 admin 时返回，普通用户拿不到） -->
     <el-table-column v-if="auth.isAdmin" prop="owner_name" label="创建人" width="120" />
+
+        <!-- 归属：我的 / 角色组共享的（角色组共享圈，2026-11-23） -->
+        <el-table-column label="归属" width="180">
+          <template #default="{ row }">
+            <OwnershipTag
+              :ownership="row.ownership"
+              :fallback-is-own="row.owner_id != null && row.owner_id === auth.user?.id"
+              :others-label="auth.isAdmin ? '他人' : '共享'"
+            />
+          </template>
+        </el-table-column>
 
         <el-table-column label="类型" width="100">
           <template #default="{ row }">
@@ -1871,12 +1926,24 @@ onMounted(load)
           </template>
         </el-table-column>
         <!-- 操作列：所有登录用户可见（试算谁都能做），
-             但**编辑 / 删除只对自己的指标**可用（跟随后端的归属规则） -->
-        <el-table-column label="操作" width="170" fixed="right">
+             但**编辑 / 删除只对自己的指标**可用（跟随后端的归属规则）；
+             角色组共享来的指标**只读** —— 按钮禁用 + tooltip 说明。 -->
+        <el-table-column label="操作" width="210" fixed="right">
           <template #default="{ row }">
             <div class="action-cell">
+              <el-tooltip
+                v-if="rowReadOnly(row)"
+                :content="READ_ONLY_TOOLTIP"
+                placement="top"
+              >
+                <span class="action-disabled">
+                  <el-button link type="primary" disabled data-testid="metric-action-edit">
+                    编辑
+                  </el-button>
+                </span>
+              </el-tooltip>
               <el-button
-                v-if="canEdit(row)"
+                v-else-if="canEdit(row)"
                 link
                 type="primary"
                 data-testid="metric-action-edit"
@@ -1885,7 +1952,7 @@ onMounted(load)
                 编辑
               </el-button>
               <el-button link type="primary" data-testid="metric-action-compute" @click="openCompute(row.id, row.display_precision)">试算</el-button>
-              <el-dropdown v-if="canEdit(row)" trigger="click" @command="(cmd: unknown) => onRowCommand(String(cmd), row)">
+              <el-dropdown v-if="canEdit(row) && !rowReadOnly(row)" trigger="click" @command="(cmd: unknown) => onRowCommand(String(cmd), row)">
                 <el-button link type="primary" data-testid="metric-action-more">
                   <el-icon><MoreFilled /></el-icon>
                 </el-button>
@@ -1895,6 +1962,17 @@ onMounted(load)
                   </el-dropdown-menu>
                 </template>
               </el-dropdown>
+              <el-tooltip
+                v-else-if="rowReadOnly(row)"
+                :content="READ_ONLY_TOOLTIP"
+                placement="top"
+              >
+                <span class="action-disabled">
+                  <el-button link type="danger" disabled data-testid="metric-action-delete">
+                    删除
+                  </el-button>
+                </span>
+              </el-tooltip>
             </div>
           </template>
         </el-table-column>
@@ -2798,8 +2876,18 @@ onMounted(load)
   }
 }
 
+/* 禁用的按钮：外面套一层 span 才能触发 el-tooltip（disabled 元素不派发鼠标事件） */
+.action-disabled {
+  display: inline-flex;
+  align-items: center;
+}
+
 .filter-tags {
   width: 300px;
+}
+
+.filter-scope {
+  width: 150px;
 }
 
 .tag-cell {

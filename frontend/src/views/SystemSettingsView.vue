@@ -1,9 +1,11 @@
 <script setup lang="ts">
 /**
- * 系统设置：推送记录 + 运行时配置概览 + 用户管理。
+ * 系统设置：推送记录 + 运行时配置概览 + 用户管理 + 角色组（共享圈）。
  * 运行时配置中，邮件与 AI 集成可直接编辑保存（需管理员）；密钥只写不读。
+ *
+ * 「角色组」页签是 admin-only；普通用户在「用户」页签里能看到自己加入的角色组（只读）。
  */
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 
 import { confirmDanger } from '@/components/ConfirmDialog'
@@ -18,11 +20,13 @@ import {
   type MailSettingsUpdate,
   type SystemSettings,
 } from '@/api/system'
+import { roleApi } from '@/api/roles'
 import { userApi } from '@/api/users'
 import type { AdSettings } from '@/api/adTypes'
-import type { UserRead } from '@/api/types'
+import type { RoleMemberRead, RoleRead, UserRead } from '@/api/types'
 import { useAuthStore } from '@/stores/auth'
 import { parseApiError } from '@/utils/error'
+import { formatDateTime } from '@/utils/format'
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
@@ -458,10 +462,184 @@ async function onDeleteUser(row: UserRead) {
   }
 }
 
+/* ---- 角色组（共享圈，2026-11-23）---- */
+/**
+ * 「角色组」= 一组人互相可见对方的指标 / 报告任务（**只读**）。
+ *
+ * 与「用户权限」（users.role 的 admin / user 两档）是**两回事** ——
+ * 页面上分别叫「用户权限」与「角色组」，不要混用。
+ *
+ * 可见性（后端保证）：admin 见全部角色；普通用户只见自己加入的。
+ */
+const roles = ref<RoleRead[]>([])
+const rolesLoading = ref(false)
+const roleDialogVisible = ref(false)
+const roleSaving = ref(false)
+const editingRoleId = ref<number | null>(null)
+const roleForm = reactive({
+  name: '',
+  description: '',
+})
+/** 弹窗里勾选的成员（user id） */
+const roleSelectedUserIds = ref<number[]>([])
+/** 打开弹窗时该角色**已有**的成员（保存时用它算差集） */
+const roleOriginalMemberIds = ref<number[]>([])
+/** 成员搜索关键词 */
+const roleMemberKeyword = ref('')
+
+async function loadRoles() {
+  // 「角色组」页签是 admin-only；普通用户在「用户」页签里看自己加入的那些
+  if (!auth.isAdmin) return
+  rolesLoading.value = true
+  try {
+    roles.value = (await roleApi.list()).data
+  } catch (error) {
+    ElMessage.error(parseApiError(error).message)
+  } finally {
+    rolesLoading.value = false
+  }
+}
+
+function openRoleCreate() {
+  editingRoleId.value = null
+  roleForm.name = ''
+  roleForm.description = ''
+  roleSelectedUserIds.value = []
+  roleOriginalMemberIds.value = []
+  roleMemberKeyword.value = ''
+  roleDialogVisible.value = true
+}
+
+async function openRoleEdit(row: RoleRead) {
+  editingRoleId.value = row.id
+  roleForm.name = row.name
+  roleForm.description = row.description ?? ''
+  roleSelectedUserIds.value = []
+  roleOriginalMemberIds.value = []
+  roleMemberKeyword.value = ''
+  roleDialogVisible.value = true
+  try {
+    const { data } = await roleApi.members(row.id)
+    roleOriginalMemberIds.value = data.map((m) => m.user_id)
+    roleSelectedUserIds.value = [...roleOriginalMemberIds.value]
+  } catch (error) {
+    ElMessage.error(parseApiError(error).message)
+  }
+}
+
+/** 成员勾选列表的候选项（按姓名 / 登录名 / 邮箱过滤） */
+const roleMemberCandidates = computed(() => {
+  const kw = roleMemberKeyword.value.trim().toLowerCase()
+  if (!kw) return users.value
+  return users.value.filter((u) =>
+    [u.display_name, u.username, u.email].some((x) => (x ?? '').toLowerCase().includes(kw)),
+  )
+})
+
+/** 成员差集同步：加新增的、删掉取消勾选的 */
+async function syncRoleMembers(roleId: number, before: number[], after: number[]): Promise<void> {
+  const beforeSet = new Set(before)
+  const afterSet = new Set(after)
+  const added = after.filter((id) => !beforeSet.has(id))
+  const removed = before.filter((id) => !afterSet.has(id))
+  if (added.length) await roleApi.addMembers(roleId, added)
+  for (const id of removed) await roleApi.removeMember(roleId, id)
+}
+
+async function saveRole() {
+  const name = roleForm.name.trim()
+  if (!name) {
+    ElMessage.warning('请填写角色组名称')
+    return
+  }
+  roleSaving.value = true
+  try {
+    if (editingRoleId.value === null) {
+      const { data } = await roleApi.create({ name, description: roleForm.description.trim() })
+      await syncRoleMembers(data.id, [], roleSelectedUserIds.value)
+      ElMessage.success('角色组已创建')
+    } else {
+      await roleApi.update(editingRoleId.value, {
+        name,
+        description: roleForm.description.trim(),
+      })
+      await syncRoleMembers(
+        editingRoleId.value,
+        roleOriginalMemberIds.value,
+        roleSelectedUserIds.value,
+      )
+      ElMessage.success('角色组已保存')
+    }
+    roleDialogVisible.value = false
+    await loadRoles()
+  } catch (error) {
+    ElMessage.error(parseApiError(error).message)
+  } finally {
+    roleSaving.value = false
+  }
+}
+
+async function onDeleteRole(row: RoleRead) {
+  const ok = await confirmDanger(
+    '删除角色组',
+    `确认删除角色组「${row.name}」？\n该角色组的成员会一并移除，成员之间的共享关系随之消失。`,
+  )
+  if (!ok) return
+  try {
+    await roleApi.remove(row.id)
+    ElMessage.success('角色组已删除')
+    await loadRoles()
+  } catch (error) {
+    ElMessage.error(parseApiError(error).message)
+  }
+}
+
+/* ---- 普通用户：我加入的角色组（只读） ---- */
+const myRoles = ref<RoleRead[]>([])
+const myRolesLoading = ref(false)
+const myRoleMembers = ref<Record<number, RoleMemberRead[]>>({})
+
+async function loadMyRoles() {
+  // admin 在「角色组」页签里看全部，这里不需要
+  if (auth.isAdmin) return
+  myRolesLoading.value = true
+  try {
+    const { data } = await roleApi.list()
+    myRoles.value = data
+    const map: Record<number, RoleMemberRead[]> = {}
+    for (const r of data) {
+      try {
+        const m = await roleApi.members(r.id)
+        map[r.id] = m.data
+      } catch {
+        map[r.id] = []
+      }
+    }
+    myRoleMembers.value = map
+  } catch (error) {
+    ElMessage.error(parseApiError(error).message)
+  } finally {
+    myRolesLoading.value = false
+  }
+}
+
+/** 角色组成员的显示名（自己那组排在最前） */
+function roleMemberNames(roleId: number): string {
+  const list = myRoleMembers.value[roleId] ?? []
+  if (!list.length) return '—'
+  const me = auth.user?.id
+  const mine = list.filter((m) => m.user_id === me)
+  const others = list.filter((m) => m.user_id !== me)
+  const label = (m: RoleMemberRead) => m.display_name || m.username
+  return [...mine, ...others].map(label).join('、')
+}
+
 onMounted(() => {
   void loadSettings()
   void loadUsers()
   void loadAdSettings()
+  void loadRoles()
+  void loadMyRoles()
 })
 </script>
 
@@ -815,6 +993,75 @@ onMounted(() => {
           </el-row>
         </div>
       </el-tab-pane>
+    <!-- 角色组（共享圈）：admin-only 的管理页 -->
+      <el-tab-pane
+        v-if="auth.isAdmin"
+        label="角色组"
+        name="roles"
+        data-testid="settings-tab-roles"
+      >
+        <div class="roles-pane">
+          <el-alert
+            type="info"
+            show-icon
+            :closable="false"
+            class="roles-hint"
+            title="角色组 = 共享圈：同组的人互相可见对方的指标与报告任务（只读，不能替对方修改）"
+          />
+          <div class="users-toolbar">
+            <el-button type="primary" data-testid="role-create" @click="openRoleCreate">
+              新建角色组
+            </el-button>
+            <el-button :loading="rolesLoading" data-testid="roles-refresh" @click="loadRoles">
+              刷新
+            </el-button>
+            <span class="text-muted">共 {{ roles.length }} 个角色组</span>
+          </div>
+
+          <el-table
+            v-loading="rolesLoading"
+            :data="roles"
+            empty-text="暂无角色组"
+            data-testid="roles-table"
+          >
+            <el-table-column prop="name" label="名称" min-width="140" />
+            <el-table-column label="描述" min-width="200">
+              <template #default="{ row }">
+                {{ row.description || '—' }}
+              </template>
+            </el-table-column>
+            <el-table-column label="成员数" width="90" align="center">
+              <template #default="{ row }">{{ row.member_count ?? 0 }}</template>
+            </el-table-column>
+            <el-table-column label="创建人" width="120">
+              <template #default="{ row }">{{ row.created_by_name || '—' }}</template>
+            </el-table-column>
+            <el-table-column label="创建时间" width="160">
+              <template #default="{ row }">{{ formatDateTime(row.created_at) }}</template>
+            </el-table-column>
+            <el-table-column label="操作" width="140" fixed="right">
+              <template #default="{ row }">
+                <el-button
+                  link
+                  type="primary"
+                  :data-testid="`role-edit-${row.id}`"
+                  @click="openRoleEdit(row)"
+                >
+                  编辑
+                </el-button>
+                <el-button
+                  link
+                  type="danger"
+                  :data-testid="`role-delete-${row.id}`"
+                  @click="onDeleteRole(row)"
+                >
+                  删除
+                </el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+        </div>
+      </el-tab-pane>
     <!-- 用户管理 -->
       <el-tab-pane label="用户" name="users" data-testid="settings-tab-users">
         <div class="users-pane">
@@ -826,6 +1073,37 @@ onMounted(() => {
             class="users-hint"
             title="你以普通用户身份查看，仅可浏览；新建 / 编辑 / 停用 / 删除需管理员权限"
           />
+          <!-- 普通用户：自己加入的角色组（只读） -->
+          <el-card
+            v-if="!auth.isAdmin"
+            shadow="never"
+            class="my-roles-card"
+            data-testid="my-roles-card"
+          >
+            <template #header>
+              <div class="card-head">
+                <span>我加入的角色组</span>
+                <span class="text-muted">只读</span>
+              </div>
+            </template>
+            <el-skeleton v-if="myRolesLoading" :rows="2" animated />
+            <el-empty
+              v-else-if="!myRoles.length"
+              description="你还没有加入任何角色组"
+              :image-size="60"
+            />
+            <div v-else class="my-roles">
+              <div v-for="r in myRoles" :key="r.id" class="my-role">
+                <div class="my-role__head">
+                  <span class="soft-tag soft-tag--info">{{ r.name }}</span>
+                  <span class="text-muted">{{ r.description || '（无描述）' }}</span>
+                </div>
+                <div class="text-muted my-role__members">
+                  成员（{{ r.member_count ?? 0 }}）：{{ roleMemberNames(r.id) }}
+                </div>
+              </div>
+            </div>
+          </el-card>
           <div class="users-toolbar">
             <el-button
               v-if="auth.isAdmin"
@@ -922,6 +1200,56 @@ onMounted(() => {
         </div>
       </el-tab-pane>
     </el-tabs>
+
+    <!-- 新建 / 编辑角色组（admin） -->
+    <FormDialog
+      v-model:visible="roleDialogVisible"
+      :title="editingRoleId === null ? '新建角色组' : '编辑角色组'"
+      :submitting="roleSaving"
+      width="640px"
+      @submit="saveRole"
+    >
+      <el-form label-width="90px" @submit.prevent data-testid="role-dialog">
+        <el-form-item label="名称" required>
+          <el-input
+            v-model="roleForm.name"
+            placeholder="如：海油专线组"
+            data-testid="role-form-name"
+          />
+        </el-form-item>
+        <el-form-item label="描述">
+          <el-input
+            v-model="roleForm.description"
+            type="textarea"
+            :rows="2"
+            placeholder="留空则无描述"
+            data-testid="role-form-desc"
+          />
+        </el-form-item>
+        <el-form-item label="成员">
+          <div class="role-members">
+            <el-input
+              v-model="roleMemberKeyword"
+              placeholder="搜索姓名 / 登录名 / 邮箱"
+              clearable
+              size="small"
+              data-testid="role-member-search"
+            />
+            <el-checkbox-group v-model="roleSelectedUserIds" class="role-members__list">
+              <el-checkbox v-for="u in roleMemberCandidates" :key="u.id" :value="u.id" border>
+                <span class="role-members__name">{{ u.display_name || u.username }}</span>
+                <span class="text-muted role-members__meta">
+                  {{ u.username }}{{ u.is_active === false ? '（停用）' : '' }}
+                </span>
+              </el-checkbox>
+            </el-checkbox-group>
+            <div class="text-muted form-hint">
+              已选 {{ roleSelectedUserIds.length }} 人；同组成员之间互相可见对方的指标与报告任务（只读）
+            </div>
+          </div>
+        </el-form-item>
+      </el-form>
+    </FormDialog>
 
     <!-- 新建用户 -->
     <FormDialog
@@ -1219,6 +1547,60 @@ onMounted(() => {
 
 .users-hint {
   margin-bottom: var(--space-3);
+}
+
+/* ---- 角色组（共享圈） ---- */
+.roles-hint {
+  margin-bottom: var(--space-3);
+}
+
+.role-members {
+  width: 100%;
+}
+
+.role-members__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  max-height: 260px;
+  overflow-y: auto;
+  margin-top: var(--space-2);
+  padding: var(--space-2);
+  border: 1px solid var(--color-border, #e2e8f0);
+  border-radius: var(--rp-radius, 4px);
+}
+
+.role-members__name {
+  margin-right: var(--space-1);
+}
+
+.role-members__meta {
+  font-size: 12px;
+}
+
+.my-roles-card {
+  margin-bottom: var(--space-4);
+}
+
+.my-role {
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--color-border, #e2e8f0);
+}
+
+.my-role:last-child {
+  border-bottom: none;
+}
+
+.my-role__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.my-role__members {
+  margin-top: 4px;
+  font-size: 13px;
 }
 
 .full-width {

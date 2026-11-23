@@ -22,6 +22,8 @@ export const metricApi = {
     q?: string
     status?: 'active' | 'inactive' | 'all'
     tag?: string[]
+    /** 归属范围：all=全部 / mine=仅我的 / shared=角色组共享的（后端未实现时忽略该参数） */
+    scope?: 'all' | 'mine' | 'shared'
   }) {
     const q: Record<string, unknown> = {}
     if (params.page) q.page = params.page
@@ -29,6 +31,7 @@ export const metricApi = {
     if (params.q) q.q = params.q
     if (params.status) q.status = params.status
     if (params.tag?.length) q.tag = params.tag
+    if (params.scope) q.scope = params.scope
     return http.get<MetricPage>('/metrics/paged', { params: q })
   },
 

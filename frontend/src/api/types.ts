@@ -240,6 +240,8 @@ export interface QueryConfigResolved {
 
 export interface MetricListItem extends MetricDefinitionRead {
   query_config_resolved: QueryConfigResolved | null
+  /** 归属信息（角色组共享圈）；后端未下发时为 undefined，消费端用 ownershipOf() 兜底 */
+  ownership?: OwnershipInfo
 }
 
 export interface MetricDetail extends MetricDefinitionRead {
@@ -715,6 +717,8 @@ export interface ReportTaskRead {
   recipient_emails: string[]
   recipient_count: number
   created_by: number
+  /** 归属信息（角色组共享圈）；后端未下发时为 undefined，消费端用 ownershipOf() 兜底 */
+  ownership?: OwnershipInfo
   created_at: string
   updated_at: string
   last_run_at: string | null
@@ -836,4 +840,47 @@ export interface EfficiencyValue {
   tasks: TaskEfficiencyRead[]
   mine: TaskEfficiencyRead[]
   mine_summary: EfficiencySummary
+}
+
+// --------------------------------------------------------------------------
+// 角色组（共享圈）：一组人互相可见对方的指标 / 报告任务（**只读**）
+//
+// 与「用户权限」（users.role 的 admin/user 两档）是两回事，页面上分别叫
+// 「用户权限」与「角色组」，不要混用。
+// --------------------------------------------------------------------------
+
+/** 角色组（对齐后端 schemas/roles.RoleRead） */
+export interface RoleRead {
+  id: number
+  /** 角色名（全局唯一） */
+  name: string
+  description: string
+  created_by: number | null
+  created_by_name?: string | null
+  /** 成员数；后端未返回时为 undefined，展示端用 ?? 0 兜底 */
+  member_count?: number
+  created_at: string
+}
+
+/** 角色组成员（对齐后端 schemas/roles.RoleMemberRead） */
+export interface RoleMemberRead {
+  user_id: number
+  username: string
+  display_name: string
+  email: string
+}
+
+/**
+ * 归属信息（指标 / 报告任务）：这条资源属于谁、我能不能改。
+ *
+ * 后端尚未下发该字段时整个 ownership 为 undefined —— 消费端一律用
+ * `utils/ownership.ts` 的 `ownershipOf()` 兜底，不要直接解构。
+ */
+export interface OwnershipInfo {
+  /** 是否是自己的资源 */
+  is_own: boolean
+  /** 通过哪些角色组可见（不是自己的那些）；空数组 = 只有自己可见 */
+  shared_by_roles: string[]
+  /** true = 只读（同角色组共享来的），编辑 / 删除按钮要禁用 */
+  read_only: boolean
 }

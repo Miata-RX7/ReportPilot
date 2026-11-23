@@ -4,12 +4,14 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { MoreFilled } from '@element-plus/icons-vue'
 
 import PageHeader from '@/components/PageHeader.vue'
+import OwnershipTag from '@/components/OwnershipTag.vue'
 import ReportDetailDialog from '@/components/ReportDetailDialog.vue'
 import { reportTaskApi } from '@/api/reportTasks'
 import { reportApi } from '@/api/reports'
 import { templateApi } from '@/api/templates'
 import { userApi } from '@/api/users'
 import type {
+  OwnershipInfo,
   ReportListItem,
   ReportStatus,
   ReportTaskRead,
@@ -29,12 +31,32 @@ import { downloadBlob, filenameFromDisposition } from '@/utils/download'
 import { parseApiError } from '@/utils/error'
 import { useAuthStore } from '@/stores/auth'
 import { formatDateTime, periodLabel } from '@/utils/format'
+import { ownershipOf, READ_ONLY_TOOLTIP } from '@/utils/ownership'
 
 const rows = ref<ReportTaskRead[]>([])
 const auth = useAuthStore()
 const loading = ref(false)
 const templates = ref<TemplateListItem[]>([])
 const users = ref<UserRead[]>([])
+
+/**
+ * 这个任务对当前用户是不是「只读」（角色组共享来的，2026-11-23）。
+ *
+ * 可见 ≠ 可编辑：同角色组成员的任务**只读**，编辑 / 停用 / 删除 / 手动触发
+ * 仍然只限属主或 admin（跟随后端 `ensure_task_editable`）。
+ * 后端还没下发 `ownership` 字段时按「不是只读」处理（= 旧行为）。
+ */
+function rowReadOnly(row: { ownership?: OwnershipInfo | null } | null | undefined): boolean {
+  return ownershipOf(row).read_only === true
+}
+
+/** 能否编辑 / 停用 / 删除 / 手动触发这个任务 */
+function canEditTask(row: ReportTaskRead): boolean {
+  if (rowReadOnly(row)) return false
+  if (auth.isAdmin) return true
+  const me = auth.user?.id
+  return !!me && row.created_by === me
+}
 
 // ---------------- 新建/编辑弹窗 ----------------
 const dialogVisible = ref(false)
@@ -419,6 +441,16 @@ onMounted(load)
       </el-table-column>
       <!-- 创建人只有 admin 能看到 -->
       <el-table-column v-if="auth.isAdmin" prop="created_by_name" label="创建人" width="120" />
+      <!-- 归属：我的 / 角色组共享的（角色组共享圈，2026-11-23） -->
+      <el-table-column label="归属" width="180">
+        <template #default="{ row }">
+          <OwnershipTag
+            :ownership="row.ownership"
+            :fallback-is-own="row.created_by === auth.user?.id"
+            :others-label="auth.isAdmin ? '他人' : '共享'"
+          />
+        </template>
+      </el-table-column>
       <el-table-column label="模板" min-width="140">
         <template #default="{ row }">{{ row.template_name ?? `#${row.template_id}` }}</template>
       </el-table-column>
@@ -461,21 +493,60 @@ onMounted(load)
           <span v-else class="text-muted">—</span>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="250" fixed="right">
+      <el-table-column label="操作" width="290" fixed="right">
         <template #default="{ row }">
           <!-- 与模板管理页一致：flex + align-items:center 保证三点与文字垂直居中、间距统一 -->
           <div class="action-cell">
-            <el-button link type="primary" data-testid="task-action-edit" @click="openEdit(row)">
+            <!-- 角色组共享来的任务只读：按钮禁用 + tooltip 说明 -->
+            <el-tooltip
+              v-if="rowReadOnly(row)"
+              :content="READ_ONLY_TOOLTIP"
+              placement="top"
+            >
+              <span class="action-disabled">
+                <el-button link type="primary" disabled data-testid="task-action-edit">
+                  编辑
+                </el-button>
+              </span>
+            </el-tooltip>
+            <el-button
+              v-else-if="canEditTask(row)"
+              link
+              type="primary"
+              data-testid="task-action-edit"
+              @click="openEdit(row)"
+            >
               编辑
             </el-button>
-            <el-button link type="primary" data-testid="task-action-run" @click="onRun(row)">
+            <el-tooltip
+              v-if="rowReadOnly(row)"
+              :content="READ_ONLY_TOOLTIP"
+              placement="top"
+            >
+              <span class="action-disabled">
+                <el-button link type="primary" disabled data-testid="task-action-run">
+                  手动触发
+                </el-button>
+              </span>
+            </el-tooltip>
+            <el-button
+              v-else-if="canEditTask(row)"
+              link
+              type="primary"
+              data-testid="task-action-run"
+              @click="onRun(row)"
+            >
               手动触发
             </el-button>
             <el-button link type="primary" data-testid="task-action-history" @click="viewHistory(row)">
               执行记录
             </el-button>
             <!-- 停用 / 删除收进三点菜单（与模板管理一致），避免操作列过宽 -->
-            <el-dropdown trigger="click" @command="(cmd: string) => onMoreAction(cmd, row)">
+            <el-dropdown
+              v-if="canEditTask(row)"
+              trigger="click"
+              @command="(cmd: string) => onMoreAction(cmd, row)"
+            >
               <el-button link type="primary" data-testid="task-action-more">
                 <el-icon><MoreFilled /></el-icon>
               </el-button>
@@ -495,6 +566,17 @@ onMounted(load)
                 </el-dropdown-menu>
               </template>
             </el-dropdown>
+            <el-tooltip
+              v-else-if="rowReadOnly(row)"
+              :content="READ_ONLY_TOOLTIP"
+              placement="top"
+            >
+              <span class="action-disabled">
+                <el-button link type="primary" disabled data-testid="task-action-more">
+                  <el-icon><MoreFilled /></el-icon>
+                </el-button>
+              </span>
+            </el-tooltip>
           </div>
         </template>
       </el-table-column>
@@ -766,6 +848,12 @@ onMounted(load)
   .el-button {
     margin-left: 0;
   }
+}
+
+/* 禁用的按钮：外面套一层 span 才能触发 el-tooltip（disabled 元素不派发鼠标事件） */
+.action-disabled {
+  display: inline-flex;
+  align-items: center;
 }
 
 /* 操作列按钮不换行 */
