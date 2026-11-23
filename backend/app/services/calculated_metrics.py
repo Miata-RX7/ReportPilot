@@ -27,6 +27,33 @@ logger = logging.getLogger(__name__)
 BUILTIN_MINUTES = "minutes"
 
 
+async def _peer_ids_of(db: AsyncSession, user_id: int) -> frozenset[int]:
+    """同角色组成员的 user id 集合（不含自己）。
+
+    用于「计算型指标可引用同角色成员的指标」（2026-11-23）。
+    一次查询：我的角色 -> 这些角色下的全部成员。
+    """
+    from sqlalchemy import select
+
+    from app.models.role import RoleMember
+
+    my_roles = (
+        await db.scalars(
+            select(RoleMember.role_id).where(RoleMember.user_id == user_id)
+        )
+    ).all()
+    if not my_roles:
+        return frozenset()
+    peers = (
+        await db.scalars(
+            select(RoleMember.user_id).where(
+                RoleMember.role_id.in_(list(my_roles))
+            )
+        )
+    ).all()
+    return frozenset(int(u) for u in peers if int(u) != user_id)
+
+
 async def validate_calculated_config(
     db: AsyncSession,
     *,
@@ -43,6 +70,12 @@ async def validate_calculated_config(
     if not formula:
         raise ValueError("算式不能为空")
     variables = cfg.get("variables") or []
+
+    # **同角色组成员**（2026-11-23）：计算型指标可以引用他们的指标。
+    # 一次算完（整段算式共用），别逐个变量查。
+    peer_ids: frozenset[int] = frozenset()
+    if owner_id is not None:
+        peer_ids = await _peer_ids_of(db, owner_id)
 
     try:
         parsed = parse_expression(formula)
@@ -109,8 +142,19 @@ async def validate_calculated_config(
         #
         # 前端本来也只列「自己可见的指标」（所以 UI 上选不到别人的），
         # 这里是把这条隐式规则变成后端明确规则。
-        if owner_id is not None and dep.owner_id != owner_id:
+        # **可以引用自己创建的指标，或同角色组成员的指标**（2026-11-23）。
+        #
+        # 原规则：只能引用自己创建的（2026-11-17）。引入「角色组」（共享圈）
+        # 后放宽到同角色 —— 否则「能看见却用不了」，角色共享形同虚设。
+        #
+        # 越权隐患仍在：同角色成员互相引用时，删基础指标仍可能级联删掉对方的
+        # 计算型指标 —— 删除接口已有「先列出依赖 + 用户确认」的流程兜底。
+        if (
+            owner_id is not None
+            and dep.owner_id != owner_id
+            and dep.owner_id not in peer_ids
+        ):
             raise ValueError(
                 f"变量 {name} 引用的「{dep.name}」不是您创建的指标，"
-                "不能参与计算（请复制一份到自己名下）"
+                "也不在您的角色组内，不能参与计算（请复制一份到自己名下）"
             )
