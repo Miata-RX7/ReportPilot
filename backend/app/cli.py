@@ -7,7 +7,7 @@
 
 reset-password 用于忘记密码时重置；默认交互式输入两遍（不回显、不进 shell
 history），仅在自动化脚本里才用 --password（会进入 shell history）。
-重置只改密码，不改角色/启用状态。
+重置只改密码，不改用户权限/启用状态。
 
 issue-token 为 Phase 1 临时方案（前端登录页 Phase 2 才做），
 登录页上线后移除该子命令。
@@ -58,7 +58,7 @@ async def _create_user(args: argparse.Namespace) -> int:
 
 
 async def _reset_password(args: argparse.Namespace) -> int:
-    """重置用户密码（只改密码，不改角色/启用状态）。
+    """重置用户密码（只改密码，不改用户权限/启用状态）。
 
     兼容历史上 password_hash 为空（如种子 admin）的账号：直接补写哈希。
     """

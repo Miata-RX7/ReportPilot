@@ -75,7 +75,11 @@ async def get_current_user(
 
 
 async def require_admin(user: User = Depends(get_current_user)) -> User:
-    """要求管理员角色（数据源/指标/模板的写操作）。"""
+    """要求管理员权限（数据源/指标/模板的写操作）。
+
+    术语说明（2026-11-23）：``users.role`` 这一列在页面上叫「用户权限」
+    （两档：admin / user）。不要与新增的「角色组」（共享圈）混淆。
+    """
     if user.role != "admin":
         raise HTTPException(status.HTTP_403_FORBIDDEN, "需要管理员权限")
     return user

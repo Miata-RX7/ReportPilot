@@ -17,7 +17,8 @@ class User(TimestampMixin, Base):
     source: Mapped[str] = mapped_column(String(16), default="local", nullable=False)
     # AD 账号无本地密码，故允许为空
     password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    # admin / user（Phase 1 两档角色）
+    # admin / user（两档「用户权限」；2026-11-23 起页面上叫「用户权限」，
+    # 与新增的「角色组」（共享圈）是两回事 —— 别混）
     role: Mapped[str] = mapped_column(
         String(16), default="user", server_default="user", nullable=False
     )

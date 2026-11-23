@@ -99,7 +99,10 @@ async def update_user(
     db: AsyncSession = Depends(get_db),
     admin: User = Depends(require_admin),
 ) -> User:
-    """编辑用户（显示名/邮箱/角色/启用状态）。"""
+    """编辑用户（显示名/邮箱/用户权限/启用状态）。
+
+    「用户权限」= ``users.role`` 这一列（admin / user），页面上显示为「用户权限」。
+    """
     user = await db.get(User, user_id)
     if user is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "用户不存在")

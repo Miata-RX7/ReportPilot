@@ -857,7 +857,7 @@ onMounted(() => {
               </template>
             </el-table-column>
             <el-table-column prop="email" label="邮箱" min-width="200" />
-            <el-table-column label="角色" width="100">
+            <el-table-column label="用户权限" width="100">
               <template #default="{ row }">
                 <span
                   :class="[
@@ -958,7 +958,7 @@ onMounted(() => {
             data-testid="user-form-password"
           />
         </el-form-item>
-        <el-form-item label="角色">
+        <el-form-item label="用户权限">
           <el-select v-model="newUser.role" class="full-width" data-testid="user-form-role">
             <el-option label="普通用户" value="user" />
             <el-option label="管理员" value="admin" />
@@ -1030,7 +1030,7 @@ onMounted(() => {
         <el-form-item label="邮箱" required>
           <el-input v-model="userForm.email" data-testid="user-form-email" />
         </el-form-item>
-        <el-form-item label="角色">
+        <el-form-item label="用户权限">
           <el-select v-model="userForm.role" class="full-width" data-testid="user-form-role">
             <el-option label="普通用户" value="user" />
             <el-option label="管理员" value="admin" />
