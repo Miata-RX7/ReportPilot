@@ -51,6 +51,19 @@ def _normalize_tags(v: object) -> object:
 # --------------------------------------------------------------------------
 # 数值变换
 # --------------------------------------------------------------------------
+class OwnershipView(BaseModel):
+    """归属视图（2026-11-23）：让前端能区分「我的」与「角色组共享的」。
+
+    - ``is_own``：资源是我建的
+    - ``shared_by_roles``：通过哪些**角色组**可见（不是自己的那些）
+    - ``read_only``：true = 角色组共享来的，**只读**（编辑/删除要禁用）
+    """
+
+    is_own: bool = True
+    shared_by_roles: list[str] = []
+    read_only: bool = False
+
+
 class Transform(BaseModel):
     """线性变换：value = raw * mul + add（默认恒等）。"""
 
@@ -735,19 +748,6 @@ class MetricListItem(MetricDefinitionRead):
     owner_name: str | None = None
     #: 归属视图（角色组共享，2026-11-23）
     ownership: OwnershipView | None = None
-
-
-class OwnershipView(BaseModel):
-    """归属视图（2026-11-23）：让前端能区分「我的」与「角色组共享的」。
-
-    - ``is_own``：资源是我建的
-    - ``shared_by_roles``：通过哪些**角色组**可见（不是自己的那些）
-    - ``read_only``：true = 角色组共享来的，**只读**（编辑/删除要禁用）
-    """
-
-    is_own: bool = True
-    shared_by_roles: list[str] = []
-    read_only: bool = False
 
 
 class MetricPage(BaseModel):
