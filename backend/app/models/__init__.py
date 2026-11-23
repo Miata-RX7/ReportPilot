@@ -6,6 +6,7 @@ from app.models.app_setting import AppSetting
 from app.models.base import Base
 from app.models.datasource import DataSource
 from app.models.metric import MetricDefinition
+from app.models.role import Role, RoleMember
 from app.models.report import (
     PushRecord,
     Report,
@@ -35,6 +36,8 @@ __all__ = [
     "TemplateBinding",
     "TemplateGrant",
     "ReportTask",
+    "Role",
+    "RoleMember",
     "Report",
     "ReportAudit",
     "PushRecord",

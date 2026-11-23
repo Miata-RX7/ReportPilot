@@ -70,8 +70,17 @@ async def get_current_user(
     authorization: str | None = Header(default=None),
     db: AsyncSession = Depends(get_db),
 ) -> User:
-    """从 Authorization: Bearer <token> 解析并校验当前用户。"""
-    return await resolve_user(db, authorization)
+    """从 Authorization: Bearer <token> 解析并校验当前用户。
+
+    顺带**挂载角色组共享范围**（2026-11-23）：同角色组成员的指标/任务对
+    当前用户**只读可见**。在这里统一挂一次，所有入口自动生效；
+    未挂载时判定函数保守（只看自己的），不会误放权。
+    """
+    user = await resolve_user(db, authorization)
+    from app.services.ownership import attach_share_scope
+
+    await attach_share_scope(db, user)
+    return user
 
 
 async def require_admin(user: User = Depends(get_current_user)) -> User:

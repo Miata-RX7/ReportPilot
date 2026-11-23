@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api import (
     ad_settings,
     efficiency,
+    roles,
     ai_calls,
     auth,
     confirmations,
@@ -113,6 +114,8 @@ def create_app() -> FastAPI:
     app.include_router(
         efficiency.router, prefix="/api/efficiency", tags=["efficiency"]
     )
+    # 角色组（共享圈）：同组成员互相可见对方的指标/任务（只读）（2026-11-23）
+    app.include_router(roles.router, prefix="/api/roles", tags=["roles"])
 
     @app.get("/api/health")
     async def health() -> dict[str, str]:

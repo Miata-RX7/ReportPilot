@@ -99,7 +99,12 @@ async def list_tasks(
     """列表：**admin 见全部；普通用户只见自己创建的**（2026-11-11）。"""
     stmt = select(ReportTask).order_by(ReportTask.is_active.desc(), ReportTask.id)
     if not ownership.is_admin(current_user):
-        stmt = stmt.where(ReportTask.created_by == current_user.id)
+        # 共享范围（2026-11-23）：自己的 + **同角色组成员的**任务（只读）。
+        # scope 由 get_current_user 依赖挂载（services/ownership.attach_share_scope），
+        # 包含用户自己。
+        scope = ownership.share_scope(current_user)
+        if scope:
+            stmt = stmt.where(ReportTask.created_by.in_(list(scope)))
     tasks = list((await db.scalars(stmt)).all())
     return [await _read(db, t, current_user) for t in tasks]
 

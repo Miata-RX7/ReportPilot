@@ -48,10 +48,14 @@ class TestMetricVisibility:
         assert not ownership.metric_visible_to(_Metric(999), me)
         assert not ownership.metric_editable_by(_Metric(999), me)
 
-    def test_public_metric_visible_but_not_editable(self) -> None:
-        """owner_id IS NULL = 公共指标：所有人可见只读。"""
+    def test_no_public_metric_concept(self) -> None:
+        """**不再有「公共指标」**（2026-11-23）。
+
+        owner_id 现在是 NOT NULL（迁移 0030 加了约束），所以「owner_id IS NULL
+        -> 所有人可见只读」这个特例**取消**了：无主的资源对谁都不可见。
+        """
         me = _User(7)
-        assert ownership.metric_visible_to(_Metric(None), me)
+        assert not ownership.metric_visible_to(_Metric(None), me)
         assert not ownership.metric_editable_by(_Metric(None), me)
 
     def test_invisible_raises_404_not_403(self) -> None:
