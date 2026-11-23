@@ -1065,18 +1065,6 @@ onMounted(() => {
             data-testid="mail-form-port"
           />
         </el-form-item>
-        <el-form-item label="确认邮件发送频率">
-          <el-input-number
-            v-model="mailForm.reminder_interval_hours"
-            :min="1"
-            :max="720"
-            :step="1"
-            controls-position="right"
-            class="full-width"
-            data-testid="mail-form-reminder-interval"
-          />
-          <span class="field-hint">每 N 小时发送 1 次确认（催办）邮件，默认 24 小时</span>
-        </el-form-item>
         <el-form-item label="用户名">
           <el-input v-model="mailForm.smtp_username" data-testid="mail-form-username" />
         </el-form-item>
@@ -1105,6 +1093,19 @@ onMounted(() => {
             placeholder="https://reports.example.com"
             data-testid="mail-form-base-url"
           />
+        </el-form-item>
+        <!-- 确认邮件（未确认催办）的发送频率：每 N 小时 1 次（2026-11-23） -->
+        <el-form-item label="确认邮件发送频率">
+          <el-input-number
+            v-model="mailForm.reminder_interval_hours"
+            :min="1"
+            :max="720"
+            :step="1"
+            controls-position="right"
+            class="full-width"
+            data-testid="mail-form-reminder-interval"
+          />
+          <span class="field-hint">每 N 小时发送 1 次确认（催办）邮件，默认 24 小时</span>
         </el-form-item>
       </el-form>
     </FormDialog>
