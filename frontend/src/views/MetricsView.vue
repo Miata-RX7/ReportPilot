@@ -2786,7 +2786,16 @@ onMounted(load)
               下拉能点（form.agg 确实变了），但**回填时找不到当前值，显示为空/旧值** ->
               用户以为「选了没保存上」。实测打开编辑弹窗时该下拉读不到值。
             -->
-            <el-select v-model="form.agg" class="full-width">
+            <!--
+              :key 是必须的（2026-11-25）：option 用 v-if 按类型切换时，
+              el-select 内部不会重算「显示值」-> 编辑已有指标时下拉显示为空/
+              旧值。加 key 让类型切换时整个 el-select 重建，显示值随之重算。
+            -->
+            <el-select
+              :key="`agg-select-${form.metric_type}`"
+              v-model="form.agg"
+              class="full-width"
+            >
               <el-option
                 v-if="form.metric_type === 'curve'"
                 label="时段平均（avg）"
