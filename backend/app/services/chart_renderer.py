@@ -34,8 +34,21 @@ from app.services.series_stats import stats_of
 logger = logging.getLogger(__name__)
 
 DPI = 150
-# 与前端 Design Token --chart-series-1..5 保持一致（容器内读不到前端 CSS）
-SERIES_COLORS = ["#3B82F6", "#10B981", "#F59E0B", "#EF4444", "#8B5CF6"]
+# 曲线色板（2026-11-25 用户指定）：顺序固定 —— 第 1 条 series 用第 1 个颜色，
+# 第 2 条用第 2 个，以此类推。
+# 必须与前端 utils/chart.ts 的 SERIES_COLORS、styles/tokens.scss 的
+# --chart-series-1..8 **完全一致** —— 否则「页面预览的颜色」与「报告 docx 里的
+# 颜色」会不一样（容器内读不到前端 CSS，只能靠这份硬编码对齐）。
+SERIES_COLORS = [
+    "#E15759",
+    "#59A14F",
+    "#4E79A7",
+    "#F28E2B",
+    "#AF7AA1",
+    "#76B7B2",
+    "#79706E",
+    "#EDC948",
+]
 # 候选中文字体，按优先级；首个可用者胜出
 FONT_CANDIDATES = [
     "Noto Sans CJK SC",

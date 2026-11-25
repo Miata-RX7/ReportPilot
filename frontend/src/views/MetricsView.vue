@@ -914,7 +914,20 @@ const timePreview = computed(() =>
 )
 
 /* ---- curve: series 增删改 ---- */
+/**
+ * 曲线最多 8 条（2026-11-25 用户要求）。
+ *
+ * 配色板长度就是 8（见 utils/chart.ts 的 SERIES_COLORS），超过 8 条颜色会开始
+ * 重复 —— 读者无法区分是第几条线。后端 schema 也做了同样的限制
+ * （schemas/metric.py 的 series max_length=8），前端这里是提前给出提示。
+ */
+const MAX_SERIES = 8
+
 function addSeriesRow() {
+  if (form.series.length >= MAX_SERIES) {
+    ElMessage.warning(`曲线最多 ${MAX_SERIES} 条（配色板只有 8 种颜色，超出会重复）`)
+    return
+  }
   form.series.push({ item_id: '', display_name: '', mul: 1, add: 0 })
 }
 

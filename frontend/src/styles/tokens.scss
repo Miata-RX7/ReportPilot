@@ -88,11 +88,16 @@
   --shadow-paper:    0 4px 24px rgba(15, 23, 42, 0.08);
 
   /* ---- 图表 ---- */
-  --chart-series-1: #2563eb;
-  --chart-series-2: #10b981;
-  --chart-series-3: #f59e0b;
-  --chart-series-4: #7c3aed;
-  --chart-series-5: #06b6d4;
+  /* 曲线色板（2026-11-25 用户指定）—— 必须与 utils/chart.ts 的 SERIES_COLORS
+     和后端 services/chart_renderer.py 的 SERIES_COLORS 完全一致 */
+  --chart-series-1: #e15759;
+  --chart-series-2: #59a14f;
+  --chart-series-3: #4e79a7;
+  --chart-series-4: #f28e2b;
+  --chart-series-5: #af7aa1;
+  --chart-series-6: #76b7b2;
+  --chart-series-7: #79706e;
+  --chart-series-8: #edc948;
   --chart-grid:     #e2e8f0;
   --chart-axis:     #94a3b8;
 

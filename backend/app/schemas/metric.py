@@ -383,12 +383,18 @@ class ScalarQueryConfig(_ScopeBase):
 class CurveQueryConfig(_ScopeBase):
     """curve：每条 series 独立成一条曲线。"""
 
-    series: list[CurveSeries] = Field(default_factory=list)
+    #: 最多 8 条曲线 —— 与配色板长度一致（2026-11-25）。
+    #: 超过 8 条时颜色会开始重复，读者无法区分。
+    series: list[CurveSeries] = Field(default_factory=list, max_length=8)
 
     @model_validator(mode="after")
     def _check_series(self) -> "CurveQueryConfig":
         if not self.series:
             raise ValueError("curve 至少需要一条曲线（series）")
+        if len(self.series) > 8:
+            raise ValueError(
+                f"曲线最多 8 条（当前 {len(self.series)} 条）—— 超过 8 条颜色会重复"
+            )
         ids = [s.item_id for s in self.series]
         dup = sorted({i for i in ids if ids.count(i) > 1})
         if dup:

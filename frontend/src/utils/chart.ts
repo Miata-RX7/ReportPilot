@@ -9,14 +9,14 @@
 
 /** 曲线色板（与 CSS 变量 --chart-series-1..8 对应） */
 export const SERIES_COLORS = [
-  '#2563eb',
-  '#0d9488',
-  '#d97706',
-  '#dc2626',
-  '#7c3aed',
-  '#0891b2',
-  '#65a30d',
-  '#db2777',
+  '#E15759',
+  '#59A14F',
+  '#4E79A7',
+  '#F28E2B',
+  '#AF7AA1',
+  '#76B7B2',
+  '#79706E',
+  '#EDC948',
 ]
 
 export interface CurveOptionInput {
