@@ -1,0 +1,95 @@
+services:
+  db:
+    image: postgres:16
+    container_name: reportpilot-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: reportpilot
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?must be set in .env}
+      POSTGRES_DB: reportpilot
+      TZ: ${TZ:-Asia/Hong_Kong}
+      PGTZ: ${TZ:-Asia/Hong_Kong}
+    volumes:
+      - /data/reportpilot/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U reportpilot -d reportpilot"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    networks: [rp]
+    logging:
+      driver: json-file
+      options: { max-size: "50m", max-file: "3" }
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: reportpilot/backend:latest
+    container_name: reportpilot-backend
+    restart: unless-stopped
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers"]
+    env_file: [.env]
+    environment:
+      TZ: ${TZ:-Asia/Hong_Kong}
+      DATABASE_URL: postgresql+asyncpg://reportpilot:${DB_PASSWORD}@db:5432/reportpilot
+      STORAGE_DIR: /data/reportpilot/appdata
+      ONLYOFFICE_URL: ${OO_PUBLIC_URL:?set externally reachable ONLYOFFICE url}
+      ONLYOFFICE_INTERNAL_URL: http://onlyoffice
+      PUBLIC_BASE_URL: http://backend:8000
+      APP_BASE_URL: ${APP_BASE_URL:?set public base url}
+    volumes:
+      - /data/reportpilot/appdata:/data/reportpilot/appdata
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [rp]
+    logging:
+      driver: json-file
+      options: { max-size: "50m", max-file: "3" }
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    image: reportpilot/frontend:latest
+    container_name: reportpilot-frontend
+    restart: unless-stopped
+    ports:
+      - "${HTTP_PORT:-8080}:80"
+    depends_on:
+      - backend
+    networks: [rp]
+    logging:
+      driver: json-file
+      options: { max-size: "50m", max-file: "3" }
+
+  onlyoffice:
+    image: onlyoffice/documentserver:latest
+    container_name: reportpilot-onlyoffice
+    restart: unless-stopped
+    environment:
+      JWT_ENABLED: "true"
+      JWT_SECRET: ${OO_JWT_SECRET:?set ONLYOFFICE jwt secret}
+      JWT_HEADER: Authorization
+      TZ: ${TZ:-Asia/Hong_Kong}
+    volumes:
+      - /data/reportpilot/onlyoffice/data:/var/lib/onlyoffice
+      - /data/reportpilot/onlyoffice/data/ds:/var/www/onlyoffice/Data
+      - /data/reportpilot/onlyoffice/logs:/var/log/onlyoffice
+    ports:
+      - "${OO_PORT:-8081}:80"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost/healthcheck || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 90s
+    networks: [rp]
+    logging:
+      driver: json-file
+      options: { max-size: "50m", max-file: "3" }
+
+networks:
+  rp:
+    driver: bridge
