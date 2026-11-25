@@ -1706,6 +1706,58 @@ function onSelectionChange(rows: MetricDefinitionRead[]): void {
 }
 
 /** 批量删除：逐条调单删接口。 */
+/* ---- 批量增加标签（2026-11-25）---- */
+const batchTagsVisible = ref(false)
+const batchTagsInput = ref('')
+/** 置空模式：确认后清空所选指标的标签（不论原来有没有） */
+const batchTagsClear = ref(false)
+
+function openBatchTags(): void {
+  batchTagsInput.value = ''
+  batchTagsClear.value = false
+  batchTagsVisible.value = true
+}
+
+function toggleBatchTagsClear(): void {
+  batchTagsClear.value = !batchTagsClear.value
+  if (batchTagsClear.value) batchTagsInput.value = ''
+}
+
+async function onBatchTagsConfirm(): Promise<void> {
+  const rows = [...selectedMetrics.value]
+  if (rows.length === 0) {
+    ElMessage.warning('请先勾选指标')
+    return
+  }
+  // 置空模式 -> tags 传 null（后端清空）；否则按逗号分隔解析
+  const tags = batchTagsClear.value
+    ? null
+    : batchTagsInput.value
+        .split(/[,，]/)
+        .map((x) => x.trim())
+        .filter(Boolean)
+  if (tags !== null && tags.length === 0) {
+    ElMessage.warning('请输入标签，或点「置空」清空标签')
+    return
+  }
+  try {
+    const res = await metricApi.batchSetTags(
+      rows.map((r) => r.id),
+      tags,
+    )
+    batchTagsVisible.value = false
+    ElMessage.success(
+      tags === null
+        ? `已清空 ${res.data.updated} 个指标的标签`
+        : `已为 ${res.data.updated} 个指标设置标签：${res.data.tags.join('、')}`,
+    )
+    selectedMetrics.value = []
+    await load()
+  } catch (e) {
+    ElMessage.error(parseApiError(e).message || '批量设置标签失败')
+  }
+}
+
 async function onBatchDelete(): Promise<void> {
   const rows = [...selectedMetrics.value]
   if (!rows.length) return
@@ -1825,6 +1877,20 @@ onMounted(load)
         批量删除放在筛选这一行，不单独占一行（用户 2026-10-22 要求）：
         它是针对「当前勾选」的操作，和筛选器同属表格上方的操作区。
       -->
+      <!--
+        批量增加标签放在批量删除**前面**（用户 2026-11-25 要求）：
+        两个都是针对「当前勾选」的操作，删除是破坏性的、放在后面更安全。
+      -->
+      <el-button
+        v-if="selectedMetrics.length > 0"
+        type="primary"
+        plain
+        class="filter-batch"
+        data-testid="metric-batch-tags"
+        @click="openBatchTags"
+      >
+        批量增加标签（{{ selectedMetrics.length }}）
+      </el-button>
       <el-button
         v-if="selectedMetrics.length > 0"
         type="danger"
@@ -1836,6 +1902,45 @@ onMounted(load)
         批量删除（{{ selectedMetrics.length }}）
       </el-button>
     </div>
+
+    <!-- 批量增加标签（2026-11-25） -->
+    <el-dialog
+      v-model="batchTagsVisible"
+      title="批量增加标签"
+      width="520px"
+      append-to-body
+    >
+      <div class="form-hint" style="margin-bottom: 12px">
+        将覆盖所选 {{ selectedMetrics.length }} 个指标的标签（已有标签会被替换）。
+        多个标签用逗号分隔。
+      </div>
+      <div style="display: flex; gap: 8px; align-items: center">
+        <el-input
+          v-model="batchTagsInput"
+          placeholder="标签，逗号分隔"
+          data-testid="batch-tags-input"
+          :disabled="batchTagsClear"
+          @keyup.enter="onBatchTagsConfirm"
+        />
+        <el-button
+          :type="batchTagsClear ? 'warning' : 'default'"
+          :plain="!batchTagsClear"
+          data-testid="batch-tags-clear"
+          @click="toggleBatchTagsClear"
+        >
+          {{ batchTagsClear ? '已置空' : '置空' }}
+        </el-button>
+      </div>
+      <div v-if="batchTagsClear" class="form-hint" style="margin-top: 8px; color: var(--el-color-warning)">
+        已置空：确认后所选指标的标签会被**清空**（不论原来有没有标签）。
+      </div>
+      <template #footer>
+        <el-button @click="batchTagsVisible = false">取消</el-button>
+        <el-button type="primary" data-testid="batch-tags-confirm" @click="onBatchTagsConfirm">
+          确认
+        </el-button>
+      </template>
+    </el-dialog>
 
     <DataTable
           :data="pagedRows"

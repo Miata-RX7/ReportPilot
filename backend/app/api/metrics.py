@@ -6,7 +6,7 @@ import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 from sqlalchemy import String, bindparam, cast, or_, select
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -728,6 +728,68 @@ async def update_metric(
     await db.refresh(metric)
     logger.info("指标已更新 id=%d type=%s", metric.id, metric.metric_type)
     return metric
+
+
+class BatchTagsRequest(BaseModel):
+    """批量设置指标标签（2026-11-25）。
+
+    - ``tags`` 给列表 -> **覆盖**所选指标的标签（去重、去空、保持顺序）
+    - ``tags`` 为 None -> **清空**所选指标的标签
+    """
+
+    metric_ids: list[int] = Field(min_length=1)
+    tags: list[str] | None = None
+
+
+@router.post("/batch/tags")
+async def batch_set_tags(
+    payload: BatchTagsRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """批量设置/清空指标标签。
+
+    权限：逐个指标校验「可编辑」（owner 或 admin）—— 同角色组共享来的指标是
+    只读的，不允许改标签；有任何一个没权限就整批拒绝（避免「改了一半」）。
+    """
+    ids = list(dict.fromkeys(payload.metric_ids))
+    rows = list(
+        (
+            await db.scalars(
+                select(MetricDefinition).where(MetricDefinition.id.in_(ids))
+            )
+        ).all()
+    )
+    found = {m.id for m in rows}
+    missing = [i for i in ids if i not in found]
+    if missing:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"指标不存在: {missing}")
+
+    for m in rows:
+        # 看不到的按 404（不泄露 id 存在），看得见但不是自己的 403
+        ownership.ensure_metric_visible(m, current_user)
+        ownership.ensure_metric_editable(m, current_user)
+
+    if payload.tags is None:
+        new_tags: list[str] = []
+    else:
+        new_tags = []
+        for t in payload.tags:
+            cleaned = (t or "").strip()
+            if cleaned and cleaned not in new_tags:
+                new_tags.append(cleaned)
+
+    for m in rows:
+        m.tags = list(new_tags)
+    await db.commit()
+
+    logger.info(
+        "批量设置指标标签 count=%d tags=%s cleared=%s",
+        len(rows),
+        new_tags,
+        payload.tags is None,
+    )
+    return {"updated": len(rows), "tags": new_tags}
 
 
 @router.delete("/{metric_id}", status_code=status.HTTP_204_NO_CONTENT)

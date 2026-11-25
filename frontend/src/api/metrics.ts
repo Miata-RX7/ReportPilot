@@ -77,6 +77,19 @@ export const metricApi = {
   remove(id: number) {
     return http.delete<void>(`/metrics/${id}`)
   },
+
+  /**
+   * 批量设置指标标签（2026-11-25）。
+   *
+   * - `tags` 给数组 -> **覆盖**所选指标的标签
+   * - `tags` 传 null -> **清空**所选指标的标签
+   */
+  batchSetTags(metricIds: number[], tags: string[] | null) {
+    return http.post<{ updated: number; tags: string[] }>('/metrics/batch/tags', {
+      metric_ids: metricIds,
+      tags,
+    })
+  },
   /** 试算：silent，失败由抽屉内 TestResultAlert 展示 */
   compute(id: number, period: string) {
     return http.post<MetricFact>(`/metrics/${id}/compute`, { period }, { silent: true })
