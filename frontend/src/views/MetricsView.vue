@@ -1979,10 +1979,16 @@ onMounted(load)
           </template>
         </el-table-column>
     <!-- 创建人只有 admin 能看到（后端也只在 admin 时返回，普通用户拿不到） -->
-    <el-table-column v-if="auth.isAdmin" prop="owner_name" label="创建人" width="120" />
+    <el-table-column
+          v-if="auth.isAdmin"
+          prop="owner_name"
+          label="创建人"
+          width="90"
+          show-overflow-tooltip
+        />
 
         <!-- 归属：我的 / 角色组共享的（角色组共享圈，2026-11-23） -->
-        <el-table-column label="归属" width="180">
+        <el-table-column label="归属" width="130" show-overflow-tooltip>
           <template #default="{ row }">
             <OwnershipTag
               :ownership="row.ownership"
@@ -1992,7 +1998,7 @@ onMounted(load)
           </template>
         </el-table-column>
 
-        <el-table-column label="类型" width="100">
+        <el-table-column label="类型" width="90">
           <template #default="{ row }">
             <span
               :class="[
@@ -2004,7 +2010,7 @@ onMounted(load)
             </span>
           </template>
         </el-table-column>
-        <el-table-column label="标签" width="180">
+        <el-table-column label="标签" width="140" show-overflow-tooltip>
           <template #default="{ row }">
             <div class="tag-cell">
               <span
@@ -2024,14 +2030,14 @@ onMounted(load)
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="数据源" width="150">
+        <el-table-column label="数据源" width="120" show-overflow-tooltip>
           <template #default="{ row }">
             <!-- time 类型不取数，没有数据源 -->
             <span v-if="row.data_source_id === null || row.data_source_id === undefined">—</span>
             <template v-else>{{ dsMap.get(row.data_source_id) ?? `#${row.data_source_id}` }}</template>
           </template>
         </el-table-column>
-        <el-table-column label="取数范围" min-width="280" show-overflow-tooltip>
+        <el-table-column label="取数范围" min-width="200" show-overflow-tooltip>
           <template #default="{ row }">
             <span class="code-chip">{{
               formatScope(
@@ -2043,7 +2049,7 @@ onMounted(load)
             }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="状态" width="90">
+        <el-table-column label="状态" width="80">
           <template #default="{ row }">
             <span :class="['soft-tag', row.is_active ? 'soft-tag--success' : 'soft-tag--neutral']">
               {{ row.is_active ? '启用' : '停用' }}
@@ -2053,7 +2059,7 @@ onMounted(load)
         <!-- 操作列：所有登录用户可见（试算谁都能做），
              但**编辑 / 删除只对自己的指标**可用（跟随后端的归属规则）；
              角色组共享来的指标**只读** —— 按钮禁用 + tooltip 说明。 -->
-        <el-table-column label="操作" width="210" fixed="right">
+        <el-table-column label="操作" width="200" fixed="right">
           <template #default="{ row }">
             <div class="action-cell">
               <el-tooltip

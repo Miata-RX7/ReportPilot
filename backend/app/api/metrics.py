@@ -868,14 +868,25 @@ async def delete_metric(
         for b in victim_bindings:
             await db.delete(b)
         for victim, _var in victims:
-            victim.is_active = False  # 软删除
+            # 硬删除（2026-11-25）：与被删指标一起彻底移除
+            await db.delete(victim)
         logger.info(
             "级联删除计算型指标 %d 个，解除其模板绑定 %d 处",
             len(victims),
             len(victim_bindings),
         )
 
-    metric.is_active = False  # 软删除
+    # **硬删除**（2026-11-25 用户要求：「是删掉，不是停用」）。
+    #
+    # 之前是软删除（is_active=False）：删除其实生效了，但指标仍留在列表里
+    # （只是状态变成「停用」）-> 用户以为删不掉 -> 反复点。
+    # 硬删后：
+    # - 指标真正消失
+    # - 同名可以再建（唯一索引 uq_metric_owner_name_active 是部分索引，
+    #   where is_active = true；硬删后不再占坑）
+    # - 历史报告不受影响：report_facts 存的是**计算结果快照**，不外键引用
+    #   metric_definitions
+    await db.delete(metric)
     await db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
