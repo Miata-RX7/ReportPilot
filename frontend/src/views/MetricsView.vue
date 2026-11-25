@@ -2049,13 +2049,7 @@ onMounted(load)
             }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="状态" width="80">
-          <template #default="{ row }">
-            <span :class="['soft-tag', row.is_active ? 'soft-tag--success' : 'soft-tag--neutral']">
-              {{ row.is_active ? '启用' : '停用' }}
-            </span>
-          </template>
-        </el-table-column>
+
         <!-- 操作列：所有登录用户可见（试算谁都能做），
              但**编辑 / 删除只对自己的指标**可用（跟随后端的归属规则）；
              角色组共享来的指标**只读** —— 按钮禁用 + tooltip 说明。 -->
