@@ -588,6 +588,16 @@ async def onlyoffice_callback(
         raise HTTPException(status.HTTP_403_FORBIDDEN, "回调签名校验失败")
 
     st = int(body.get("status", 0))
+    # **可观测性**（2026-11-25）：此前回调处理全程无日志，DS 报
+    # `sendServerRequest returned an error: {"error":1}` 时无法定位是哪一步。
+    logger.info(
+        "ONLYOFFICE 回调 template_id=%d status=%s keys=%s url=%s changesurl=%s",
+        tpl_id,
+        st,
+        sorted(body.keys()),
+        (body.get("url") or "")[:160],
+        (body.get("changesurl") or "")[:160],
+    )
     if st in onlyoffice_service.STATUS_FORCE_SAVE:
         # 强制保存（autosave/forcesave）：DS 侧已持有最新文档，仅确认即可，
         # 不落盘、不建版本，避免一次编辑产生大量重复版本。
@@ -599,7 +609,22 @@ async def onlyoffice_callback(
 
     url = body.get("url")
     if not url:
-        return {"error": 1}
+        # 兜底：某些情况下 DS 只给 changesurl（增量改动包），它同样是可下载的
+        # 文档快照。原先这里**静默**返回 error:1，DS 侧只看到
+        # `sendServerRequest returned an error`，两边都看不到原因。
+        url = body.get("changesurl")
+        if url:
+            logger.info(
+                "ONLYOFFICE 回调无 url，改用 changesurl template_id=%d", tpl_id
+            )
+        else:
+            logger.warning(
+                "ONLYOFFICE 回调缺少可下载地址 template_id=%d status=%s body=%s",
+                tpl_id,
+                st,
+                {k: v for k, v in body.items() if k != "history"},
+            )
+            return {"error": 1}
     try:
         data = await onlyoffice_service.download_document(url)
     except Exception:
