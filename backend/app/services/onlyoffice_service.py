@@ -198,7 +198,21 @@ def to_internal_url(url: str) -> str:
     if not b.scheme or not b.netloc:
         return url
     p = urlsplit(url)
-    return urlunsplit((b.scheme, b.netloc, p.path, p.query, p.fragment))
+    path = p.path
+    # **剥掉对外地址的路径前缀**（子路径方案，2026-11-25）。
+    #
+    # DS 在子路径部署下生成的下载 url 带 /onlyoffice 前缀：
+    #   http://<对外地址>:8080/onlyoffice/cache/files/data/.../output.docx
+    # 而 DS **容器内**的真实路径没有这个前缀（/cache/files/...）——
+    # 直接把带前缀的 path 拼到内部地址后面会得到
+    #   http://onlyoffice/onlyoffice/cache/... -> **404**
+    #
+    # 前缀取自 onlyoffice_url 的 path（配置驱动，不硬编码）：
+    #   https://report.livecom.ltd/onlyoffice -> /onlyoffice
+    public_path = urlsplit(get_settings().onlyoffice_url.strip()).path.rstrip("/")
+    if public_path and path.startswith(public_path + "/"):
+        path = path[len(public_path) :]
+    return urlunsplit((b.scheme, b.netloc, path, p.query, p.fragment))
 
 
 async def download_document(url: str) -> bytes:
