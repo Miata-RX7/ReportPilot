@@ -20,3 +20,15 @@ storage/
 .DS_Store
 .idea/
 .vscode/
+
+# 一次性排查/部署脚本与二进制产物 —— Dockerfile 是 `COPY . .`，
+# 不排除的话这些会**跟着进镜像并分发到各环境**（AGENTS.md §3.7 的坑）。
+# 曾经把含 token 的 tok.sh 打进生产镜像。
+*.sh
+*.xlsx
+*.xls
+*.docx
+*.png
+*.pdf
+tmp/
+deploy-tmp/
