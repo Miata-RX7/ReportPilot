@@ -868,6 +868,13 @@ function onMetricTypeChange() {
   form.pie_item_id = ''
   if (form.metric_type === 'curve') {
     form.item_ids = []
+    // 曲线默认「时段峰值」（2026-11-25 用户要求）。
+    //
+    // 流量/带宽是突发量：数据源是更细粒度的采样，平台按小时分桶，
+    // 「时段平均」会把峰值稀释好几倍，与数据源对不上
+    // （实测「蒙古国航办公室-流量图」29.48 Mbps -> 5.53 Mbps）。
+    // 用户自己选了别的值仍照他的选择保存。
+    form.agg = 'max'
   } else if (form.metric_type === 'time') {
     // 时间类型不取数：清空三级取数范围与数据源
     form.data_source_id = null
@@ -2667,19 +2674,54 @@ onMounted(load)
         -->
         <div class="transform-row">
           <el-form-item label="聚合方式" prop="agg">
+            <!--
+              **每个 el-option 自己带 v-if**，不要用 <template v-if> 包裹（2026-11-25）。
+              Element Plus 的 el-select 靠遍历默认 slot 的 children 识别选项，
+              被 template 包住的 option 不被识别 ->
+              下拉能点（form.agg 确实变了），但**回填时找不到当前值，显示为空/旧值** ->
+              用户以为「选了没保存上」。实测打开编辑弹窗时该下拉读不到值。
+            -->
             <el-select v-model="form.agg" class="full-width">
-              <template v-if="form.metric_type === 'curve'">
-                <el-option label="时段平均（avg）" value="avg" />
-                <el-option label="时段峰值（max）" value="max" />
-                <el-option label="时段最低（min）" value="min" />
-                <el-option label="时段合计（sum）" value="sum" />
-              </template>
-              <template v-else>
-                <el-option label="平均（avg）" value="avg" />
-                <el-option label="求和（sum）" value="sum" />
-                <el-option label="最大（max）" value="max" />
-                <el-option label="最小（min）" value="min" />
-              </template>
+              <el-option
+                v-if="form.metric_type === 'curve'"
+                label="时段平均（avg）"
+                value="avg"
+              />
+              <el-option
+                v-if="form.metric_type === 'curve'"
+                label="时段峰值（max）"
+                value="max"
+              />
+              <el-option
+                v-if="form.metric_type === 'curve'"
+                label="时段最低（min）"
+                value="min"
+              />
+              <el-option
+                v-if="form.metric_type === 'curve'"
+                label="时段合计（sum）"
+                value="sum"
+              />
+              <el-option
+                v-if="form.metric_type !== 'curve'"
+                label="平均（avg）"
+                value="avg"
+              />
+              <el-option
+                v-if="form.metric_type !== 'curve'"
+                label="求和（sum）"
+                value="sum"
+              />
+              <el-option
+                v-if="form.metric_type !== 'curve'"
+                label="最大（max）"
+                value="max"
+              />
+              <el-option
+                v-if="form.metric_type !== 'curve'"
+                label="最小（min）"
+                value="min"
+              />
             </el-select>
             <span v-if="form.metric_type === 'curve'" class="text-muted form-hint">
               决定曲线上**每个时间点**取该时段内的哪个统计量（数据源是更细粒度的采样，
