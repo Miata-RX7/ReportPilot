@@ -1490,7 +1490,12 @@ function buildPayload(): MetricDefinitionCreate {
             transform: { mul: Number(x.mul), add: Number(x.add) },
           })),
       },
-      type_config: {},
+      type_config: {
+        // **数值变换**（2026-11-26 修复）：原先这里写的是空对象，
+        // 导致曲线类型的「乘以 mul / 加上 add」保存后被丢弃 ——
+        // 页面上改了、保存了、再打开还是 1。
+        transform: { mul: Number(form.transform_mul), add: Number(form.transform_add) },
+      },
     }
   }
   if (form.metric_type === 'pie') {

@@ -608,7 +608,9 @@ async def _compute_curve(
         by_item.setdefault(row["item_id"], []).append((row["clock"], row[_field]))
 
     meta_by_id = {i["item_id"]: i for i in items}
-    default_tf = type_cfg.transform_default
+    # 曲线的默认数值变换（2026-11-26）：全局 transform 优先，
+    # 没有再用历史的 transform_default（老数据的兼容兜底）。
+    default_tf = type_cfg.transform or type_cfg.transform_default
     # items 与 series_list 顺序一一对应（resolve_series_items 保证顺序稳定），
     # item_id 已由 adapter 归一为整数 —— 这里不能再 int(s.item_id)，
     # 因为 AIOps 的定位串不是数字。

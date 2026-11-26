@@ -170,6 +170,11 @@ class CurveSeries(BaseModel):
 
 class CurveTypeConfig(BaseModel):
     transform_default: Transform = Field(default_factory=Transform)
+    #: 曲线的**全局数值变换**（2026-11-26）。
+    #: 指标编辑页「数值变换」里的乘以/加上就是它 —— 之前前端 curve 分支提交
+    #: 时把整个 type_config 写成空对象，这个值根本存不下来。
+    #: 优先级：每条 series 自己的 transform > 这里的 transform > transform_default
+    transform: Transform | None = None
     max_series: int = Field(default=12, ge=1, le=50)
 
 
