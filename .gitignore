@@ -3,6 +3,8 @@ __pycache__/
 .venv/
 venv/
 .env
+# 环境变量基准文件：含真实 SMTP 密码 / AI Key / JWT 与加密密钥，禁止入库
+.env.base
 storage/
 node_modules/
 dist/
